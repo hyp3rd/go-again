@@ -9,7 +9,6 @@ The registry only allows you to retry a function if it returns a registered erro
 
 ```go
     retrier := NewRetrier(3, time.Second*5, 15*time.Second)
-    // retrier.Registry.LoadDefaults()
     retrier.Registry.RegisterTemporaryError("http.ErrAbortHandler", func() ITemporaryError {
         return http.ErrAbortHandler
     })
@@ -25,7 +24,7 @@ The registry only allows you to retry a function if it returns a registered erro
     }, "http.ErrAbortHandler")
 
     if err != nil {
-        t.Errorf("retry returned an unexpected error: %v", err)
+        // handle error
     }
 ```
 
@@ -41,6 +40,9 @@ You should retry regardless of the error returned, and that's easy. It's enough 
         }
         return nil
     })
+    if err != nil {
+        // handle error
+    }
 ```
 
 It's also possible to create a Registry with the [**temporary default errors**](./registry.go?plain=1#L32):
