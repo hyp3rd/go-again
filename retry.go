@@ -1,10 +1,20 @@
 package again
 
 import (
+	"errors"
 	"fmt"
 	"math/rand"
-	"reflect"
+	"strconv"
+	"sync"
 	"time"
+)
+
+var (
+	retryErrorPool = sync.Pool{
+		New: func() interface{} {
+			return &RetryError{}
+		},
+	}
 )
 
 // RetryError is an error returned by the Retry function when the maximum number of retries is reached.
@@ -15,7 +25,7 @@ type RetryError struct {
 
 // Error returns the error message.
 func (e *RetryError) Error() string {
-	return fmt.Sprintf("maximum number of retries (%d) reached: %s", e.MaxRetries, e.Err.Error())
+	return "maximum number of retries (" + strconv.Itoa(e.MaxRetries) + ") reached: " + e.Err.Error()
 }
 
 // Unwrap returns the underlying error.
@@ -33,6 +43,8 @@ type Retrier struct {
 	Timeout time.Duration
 	// Registry is the registry for temporary errors.
 	Registry *registry
+	// once is used to ensure the registry is initialized only once.
+	once sync.Once
 }
 
 // NewRetrier returns a new Retrier.
@@ -41,15 +53,15 @@ func NewRetrier(maxRetries int, jitter time.Duration, timeout time.Duration) *Re
 		MaxRetries: maxRetries,
 		Jitter:     jitter,
 		Timeout:    timeout,
-		Registry:   newRegistry(),
+		Registry:   &registry{},
 	}
 }
 
 // SetRegistry sets the registry for temporary errors.
-func (r *Retrier) SetRegistry() {
-	if r.Registry == nil {
-		r.Registry = newRegistry()
-	}
+func (r *Retrier) SetRegistry(reg *registry) {
+	r.once.Do(func() {
+		r.Registry = reg
+	})
 }
 
 // Retry retries a function until it returns a nil error or the maximum number of retries is reached.
@@ -61,10 +73,10 @@ func (r *Retrier) Retry(fn func() error, temporaryErrors ...string) error {
 
 	// Check for invalid inputs.
 	if fn == nil {
-		return fmt.Errorf("fn cannot be nil")
+		return errors.New("fn cannot be nil")
 	}
 	if r.MaxRetries < 1 {
-		return fmt.Errorf("maxRetries must be at least 1")
+		return errors.New("maxRetries must be at least 1")
 	}
 
 	// Create a new random number generator.
@@ -104,16 +116,17 @@ func (r *Retrier) Retry(fn func() error, temporaryErrors ...string) error {
 	}
 
 	// Return an error indicating that the maximum number of retries was reached.
-	return &RetryError{MaxRetries: r.MaxRetries, Err: err}
+	retryErr := retryErrorPool.Get().(*RetryError)
+	retryErr.MaxRetries = r.MaxRetries
+	retryErr.Err = err
+	return retryErr
 }
 
 // IsTemporaryError checks if the error is in the list of temporary errors.
 func (r *Retrier) IsTemporaryError(err error, names ...string) bool {
 	tempErrors := r.Registry.GetTemporaryErrors(names...)
 	for _, tempErr := range tempErrors {
-		if reflect.TypeOf(err) == reflect.TypeOf(tempErr) && err.Error() == tempErr.Error() {
-			return true
-		}
+		return errors.Is(tempErr, err) && err.Error() == tempErr.Error()
 	}
 	return false
 }

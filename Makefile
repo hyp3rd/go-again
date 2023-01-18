@@ -2,13 +2,9 @@
 test:
 	go test -v ./...
 
-# # bench runs the benchmark tests in the benchmark subpackage of the tests package.
-# bench:
-# 	cd tests/benchmark && go test -bench=. -benchmem -benchtime=4s . -timeout 30m
-
-# # run runs the example specified in the example variable with the optional arguments specified in the ARGS variable.
-# run:
-# 	go run examples/$(example)/$(example).go $(ARGS)
+# bench runs the benchmark tests in the benchmark subpackage of the tests package.
+bench:
+	go test -bench=. -benchmem -benchtime=4s . -timeout 30m
 
 # vet runs the Go vet static analysis tool on all packages in the project.
 vet:
@@ -31,8 +27,8 @@ endif
 help:
 	@echo "Available targets:"
 	@echo
-	@echo "test      Run Go tests for the current package and the tests package."
-	# @echo "bench     Run benchmark tests in the benchmark subpackage of the tests package."
+	@echo "test      Run Go tests for the current package."
+	@echo "bench     Run benchmark tests"
 	@echo "vet       Run the Go vet static analysis tool on all packages in the project."
 	@echo "lint      Run the staticcheck and golint static analysis tools on all packages in the project."
 	@echo "help      Print this help message."

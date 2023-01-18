@@ -1,6 +1,7 @@
 package again
 
 import (
+	"errors"
 	"net/http"
 	"testing"
 	"time"
@@ -58,6 +59,7 @@ func TestRetryWithDefaults(t *testing.T) {
 	var retryCount int
 	retrier := NewRetrier(3, time.Second*5, 15*time.Second)
 	retrier.Registry.LoadDefaults()
+
 	defer retrier.Registry.Clean()
 
 	err := retrier.Retry(func() error {
@@ -66,7 +68,7 @@ func TestRetryWithDefaults(t *testing.T) {
 			return http.ErrHandlerTimeout
 		}
 		return nil
-	})
+	}, "http.ErrHandlerTimeout")
 
 	if err != nil {
 		t.Errorf("retry returned an unexpected error: %v", err)
@@ -78,7 +80,7 @@ func TestRetryWithDefaults(t *testing.T) {
 
 // TestRegistry tests the registry.
 func TestRegistry(t *testing.T) {
-	r := newRegistry()
+	r := &registry{}
 	r.RegisterTemporaryError("http.ErrAbortHandler", func() ITemporaryError {
 		return http.ErrAbortHandler
 	})
@@ -98,5 +100,56 @@ func TestRegistry(t *testing.T) {
 
 	if retrier.IsTemporaryError(http.ErrAbortHandler, "http.ErrHandlerTimeout") != false {
 		t.Errorf("registry failed to validate temporary error")
+	}
+
+	r.Clean()
+	errs := r.ListTemporaryErrors()
+	if len(errs) != 0 {
+		t.Errorf("registry failed to clean temporary errors")
+	}
+}
+
+// func BenchmarkRetry(b *testing.B) {
+// 	r := NewRetrier(50, time.Millisecond*10, time.Second)
+// 	r.Registry.RegisterTemporaryError("temporary error", func() ITemporaryError {
+// 		return errors.New("temporary error")
+// 	})
+
+//		b.ResetTimer()
+//		for i := 0; i < b.N; i++ {
+//			retryCount := i
+//			fn := func() error {
+//				retryCount++
+//				if retryCount < 50 {
+//					time.Sleep(time.Millisecond * 10)
+//					return errors.New("temporary error")
+//				}
+//				return nil
+//			}
+//			err := r.Retry(fn, "temporary error").(*RetryError)
+//			if err != nil || err.MaxRetries != 50 {
+//				b.Errorf("retry returned an unexpected error: %v", err)
+//			}
+//		}
+//	}
+func BenchmarkRetry(b *testing.B) {
+	r := NewRetrier(50, time.Millisecond*10, time.Second)
+	r.Registry.RegisterTemporaryError("temporary error", func() ITemporaryError {
+		return errors.New("temporary error")
+	})
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var retryCount int
+		fn := func() error {
+			retryCount++
+			if retryCount < 3 {
+				return errors.New("temporary error")
+			}
+			return nil
+		}
+		b.StartTimer()
+		r.Retry(fn, "temporary error")
+		b.StopTimer()
 	}
 }

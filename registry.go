@@ -15,17 +15,9 @@ type ITemporaryError interface {
 	error
 }
 
-// registry is a registry for temporary errors.
+// registry for temporary errors.
 type registry struct {
-	mutex sync.RWMutex               // mutex for the store
-	store map[string]ITemporaryError // store for temporary errors
-}
-
-// newRegistry returns a new registry.
-func newRegistry() *registry {
-	return &registry{
-		store: make(map[string]ITemporaryError),
-	}
+	storage sync.Map // store for temporary errors
 }
 
 // LoadDefaults loads the default temporary errors.
@@ -60,83 +52,70 @@ func (r *registry) LoadDefaults() *registry {
 	return r
 }
 
-// RegisterTemporaryError registers a temporary error by name.
+// RegisterTemporaryError registers a temporary error.
 func (r *registry) RegisterTemporaryError(name string, fn func() ITemporaryError) {
-	r.mutex.Lock()
-	defer r.mutex.Unlock()
-	r.store[name] = fn()
+	r.storage.Store(name, fn())
 }
 
-// RegisterTemporaryErrors registers multiple temporary errors by name.
+// RegisterTemporaryErrors registers multiple temporary errors.
 func (r *registry) RegisterTemporaryErrors(temporaryErrors map[string]func() ITemporaryError) {
-	r.mutex.Lock()
-	defer r.mutex.Unlock()
 	for name, fn := range temporaryErrors {
-		r.store[name] = fn()
+		r.storage.Store(name, fn())
 	}
 }
 
-// UnRegisterTemporaryError unregisters a temporary error by name.
+// UnRegisterTemporaryError unregisters a temporary error(s).
 func (r *registry) UnRegisterTemporaryError(names ...string) {
-	r.mutex.Lock()
-	defer r.mutex.Unlock()
 	for _, name := range names {
-		delete(r.store, name)
+		r.storage.Delete(name)
 	}
 }
 
-// RegisterTemporaryErrors registers multiple temporary errors by name.
+// UnRegisterTemporaryErrors unregisters multiple temporary errors.
 func (r *registry) UnRegisterTemporaryErrors(temporaryErrors map[string]func() ITemporaryError) {
-	r.mutex.Lock()
-	defer r.mutex.Unlock()
 	for name := range temporaryErrors {
-		delete(r.store, name)
+		r.storage.Delete(name)
 	}
 }
 
 // GetTemporaryError returns a temporary error by name.
 func (r *registry) GetTemporaryError(name string) (ITemporaryError, bool) {
-	r.mutex.RLock()
-	defer r.mutex.RUnlock()
-	tempErr, ok := r.store[name]
+	tempErr, ok := r.storage.Load(name)
 
-	return tempErr, ok
+	return tempErr.(ITemporaryError), ok
 }
 
-// GetTemporaryErrorsByName returns a list of temporary errors by name.
+// GetTemporaryErrors returns a list of temporary errors filtered by name.
 func (r *registry) GetTemporaryErrors(names ...string) []ITemporaryError {
-	r.mutex.RLock()
-	defer r.mutex.RUnlock()
 	var errors []ITemporaryError
+
 	for _, name := range names {
-		if tempErr, ok := r.store[name]; ok {
-			errors = append(errors, tempErr)
+		tempErr, ok := r.storage.Load(name)
+		if !ok {
+			continue
 		}
+		errors = append(errors, tempErr.(ITemporaryError))
 	}
+
 	return errors
 }
 
-// List returns a list of temporary errors.
+// ListTemporaryErrors returns a list of temporary errors.
 func (r *registry) ListTemporaryErrors() []ITemporaryError {
-	r.mutex.RLock()
-	defer r.mutex.RUnlock()
 	var errors []ITemporaryError
-	for _, err := range r.store {
-		errors = append(errors, err)
-	}
-	return errors
-}
 
-// Len returns the number of temporary errors.
-func (r *registry) Len() int {
-	r.mutex.RLock()
-	defer r.mutex.RUnlock()
-	return len(r.store)
+	r.storage.Range(func(key, value any) bool {
+		errors = append(errors, value.(ITemporaryError))
+		return true
+	})
+
+	return errors
 }
 
 // Clean cleans the registry.
 func (r *registry) Clean() {
-	r.mutex.Lock()
-	defer r.mutex.Unlock()
-	r.store = make(map[string]ITemporaryError)
+	r.storage.Range(func(key, value any) bool {
+		r.storage.Delete(key)
+		return true
+	})
 }
