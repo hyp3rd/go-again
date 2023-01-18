@@ -19,7 +19,7 @@ var (
 	}
 )
 
-// Function signature of retryable function
+// RetryableFunc signature of retryable function
 type RetryableFunc func() error
 
 // RetryError is an error returned by the Retry function when the maximum number of retries is reached.
