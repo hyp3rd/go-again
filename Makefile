@@ -16,6 +16,10 @@ lint:
 	$(call check_command_exists,golint) || go install -v golang.org/x/lint/golint 
 	golint ./...
 
+# run runs the example specified in the example variable with the optional arguments specified in the ARGS variable.
+run:
+	go run examples/$(example)/*.go $(ARGS)
+
 # check_command_exists is a helper function that checks if a command exists.
 check_command_exists = $(shell command -v $(1) > /dev/null && echo "true" || echo "false")
 
@@ -31,4 +35,5 @@ help:
 	@echo "bench     Run benchmark tests"
 	@echo "vet       Run the Go vet static analysis tool on all packages in the project."
 	@echo "lint      Run the staticcheck and golint static analysis tools on all packages in the project."
+	@echo "run       Run the example specified in the example variable with optional arguments specified in the ARGS variable."
 	@echo "help      Print this help message."
