@@ -9,7 +9,8 @@ The `Retry` method takes a context, a function, and an optional list of `tempora
 The registry only allows you to retry a function if it returns a registered error:
 
 ```go
-    retrier := again.NewRetrier(3, time.Millisecond*10, time.Second, time.Second)
+    // Init with defaults.
+    retrier := again.NewRetrier()
     retrier.Registry.RegisterTemporaryError("http.ErrAbortHandler", func() TemporaryError {
         return http.ErrAbortHandler
     })
@@ -33,7 +34,9 @@ Should you retry regardless of the error returned, that's easy. It's enough call
 
 ```go
     var retryCount int
-    retrier := again.NewRetrier(3, time.Millisecond*10, time.Second, time.Second)
+    retrier := again.NewRetrier(again.WithTimeout(1*time.Second),
+        again.WithJitter(500*time.Millisecond),
+        again.WithMaxRetries(3))
     err := retrier.Retry(context.TODO(), func() error {
         retryCount++
         if retryCount < 3 {
@@ -96,7 +99,9 @@ import (
 
 func main() {
     // Create a new retrier.
-    retrier := again.NewRetrier(5, time.Millisecond*10, time.Second, time.Second)
+    retrier := again.NewRetrier(again.WithTimeout(1*time.Second),
+        again.WithJitter(500*time.Millisecond),
+        again.WithMaxRetries(3))
 
     // Register a temporary error.
     retrier.Registry.RegisterTemporaryError("temporary error", func() again.TemporaryError {
