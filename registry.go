@@ -13,6 +13,8 @@ type ITemporaryError interface {
 	error
 }
 
+// type ITemporaryError error
+
 // registry for temporary errors.
 type registry struct {
 	storage sync.Map // store for temporary errors

@@ -1,6 +1,7 @@
 package again
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -40,6 +41,8 @@ type Retrier struct {
 	MaxRetries int
 	// Jitter is the amount of jitter to apply to the retry interval.
 	Jitter time.Duration
+	// Interval is the interval between retries.
+	Interval time.Duration
 	// Timeout is the timeout for the retry function.
 	Timeout time.Duration
 	// Registry is the registry for temporary errors.
@@ -49,19 +52,28 @@ type Retrier struct {
 	// mutex is the mutex used to synchronize access to the timer.
 	mutex sync.RWMutex
 	// timer is the timer used to timeout the retry function.
-	timer *time.Timer
+	// timer *time.Timer
+	timer *timerPool
 	// err is the error returned by the retry function.
 	err error
+	// cancel is a channel used to cancel the retries.
+	cancel chan struct{}
+	// stop is a channel used to stop the retries.
+	stop chan struct{}
 }
 
 // NewRetrier returns a new Retrier.
-func NewRetrier(maxRetries int, jitter time.Duration, timeout time.Duration) *Retrier {
+func NewRetrier(maxRetries int, jitter time.Duration, interval time.Duration, timeout time.Duration) *Retrier {
 	return &Retrier{
 		MaxRetries: maxRetries,
 		Jitter:     jitter,
+		Interval:   interval,
 		Timeout:    timeout,
 		Registry:   NewRegistry(),
-		timer:      time.NewTimer(timeout),
+		// timer:      time.NewTimer(timeout),
+		timer:  NewTimerPool(maxRetries, timeout),
+		cancel: make(chan struct{}),
+		stop:   make(chan struct{}),
 	}
 }
 
@@ -73,7 +85,7 @@ func (r *Retrier) SetRegistry(reg *registry) {
 }
 
 // Retry retries a function until it returns a nil error or the maximum number of retries is reached.
-func (r *Retrier) Retry(fn func() error, temporaryErrors ...string) error {
+func (r *Retrier) Retry(ctx context.Context, fn func() error, temporaryErrors ...string) error {
 	// lock the mutex to synchronize access to the timer.
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
@@ -85,7 +97,7 @@ func (r *Retrier) Retry(fn func() error, temporaryErrors ...string) error {
 
 	// Check for invalid inputs.
 	if fn == nil {
-		return errors.New("fn cannot be nil")
+		return errors.New("failed to invoke the function. It appears to be is nil")
 	}
 
 	// Create a new random number generator.
@@ -93,7 +105,7 @@ func (r *Retrier) Retry(fn func() error, temporaryErrors ...string) error {
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 
 	// defer stop the timer for the timeout.
-	defer r.timer.Stop()
+	// defer r.timer.Stop()
 
 	// Retry the function until it returns a nil error or the maximum number of retries is reached.
 	for i := 0; i < r.MaxRetries; i++ {
@@ -110,14 +122,32 @@ func (r *Retrier) Retry(fn func() error, temporaryErrors ...string) error {
 			break
 		}
 
-		// Sleep for a random duration between 0 and the jitter value.
-		sleepDuration := time.Duration(rng.Int63n(int64(r.Jitter))) + 1
+		// Check if the context is cancelled.
 		select {
-		case <-r.timer.C:
-			// Return an error if the timeout is reached.
-			return fmt.Errorf("timeout reached after %v: %w", r.Timeout, r.err)
-		case <-time.After(sleepDuration):
-			// Continue the loop if the sleep duration expires.
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		// Sleep for a random duration between interval and the jitter value.
+		// sleepDuration := time.Duration(float64(r.Interval) * (1 + rng.Float64()*float64(r.Jitter))
+		sleepDuration := time.Duration(rng.Int63n(int64(r.Jitter))) + r.Interval
+
+		// Wait for the retry interval.
+		// r.timer.Reset(time.Duration(float64(r.Interval) * (1 + rng.Float64()*float64(r.Jitter))))
+
+		// Wait for the retry interval.
+		timer := r.timer.Get()
+		timer.Reset(sleepDuration)
+		select {
+		case <-r.cancel:
+			r.timer.Put(timer)
+			return fmt.Errorf("retries cancelled")
+		case <-r.stop:
+			r.timer.Put(timer)
+			return r.err
+		case <-timer.C:
+			r.timer.Put(timer)
 		}
 	}
 
@@ -126,6 +156,13 @@ func (r *Retrier) Retry(fn func() error, temporaryErrors ...string) error {
 	retryErr.MaxRetries = r.MaxRetries
 	retryErr.Err = r.err
 	return retryErr
+}
+
+// Cancel cancels the retries.
+func (r *Retrier) Cancel() {
+	r.once.Do(func() {
+		close(r.cancel)
+	})
 }
 
 // IsTemporaryError checks if the error is in the list of temporary errors.
