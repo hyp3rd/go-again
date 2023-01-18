@@ -12,7 +12,7 @@ import (
 func TestRetry(t *testing.T) {
 	var retryCount int
 	retrier := NewRetrier(3, time.Second, time.Second, 15*time.Second)
-	retrier.Registry.RegisterTemporaryError("http.ErrAbortHandler", func() ITemporaryError {
+	retrier.Registry.RegisterTemporaryError("http.ErrAbortHandler", func() TemporaryError {
 		return http.ErrAbortHandler
 	})
 
@@ -82,7 +82,7 @@ func TestRetryWithDefaults(t *testing.T) {
 // TestRegistry tests the registry.
 func TestRegistry(t *testing.T) {
 	r := NewRegistry()
-	r.RegisterTemporaryError("http.ErrAbortHandler", func() ITemporaryError {
+	r.RegisterTemporaryError("http.ErrAbortHandler", func() TemporaryError {
 		return http.ErrAbortHandler
 	})
 
@@ -112,7 +112,7 @@ func TestRegistry(t *testing.T) {
 
 // func BenchmarkRetry(b *testing.B) {
 // 	r := NewRetrier(50, time.Millisecond*10, time.Second)
-// 	r.Registry.RegisterTemporaryError("temporary error", func() ITemporaryError {
+// 	r.Registry.RegisterTemporaryError("temporary error", func() TemporaryError {
 // 		return errors.New("temporary error")
 // 	})
 
@@ -135,7 +135,7 @@ func TestRegistry(t *testing.T) {
 //	}
 func BenchmarkRetry(b *testing.B) {
 	r := NewRetrier(5, time.Millisecond*10, time.Second, time.Second)
-	r.Registry.RegisterTemporaryError("temporary error", func() ITemporaryError {
+	r.Registry.RegisterTemporaryError("temporary error", func() TemporaryError {
 		return errors.New("temporary error")
 	})
 

@@ -10,7 +10,7 @@ The registry only allows you to retry a function if it returns a registered erro
 
 ```go
     retrier := again.NewRetrier(3, time.Millisecond*10, time.Second, time.Second)
-    retrier.Registry.RegisterTemporaryError("http.ErrAbortHandler", func() ITemporaryError {
+    retrier.Registry.RegisterTemporaryError("http.ErrAbortHandler", func() TemporaryError {
         return http.ErrAbortHandler
     })
 
@@ -62,9 +62,9 @@ goos: darwin
 goarch: amd64
 pkg: github.com/hyp3rd/go-again
 cpu: Intel(R) Core(TM) i9-9880H CPU @ 2.30GHz
-BenchmarkRetry-16         490851          9098 ns/op        5376 B/op          1 allocs/op
+BenchmarkRetry-16         490851          8926 ns/op        5376 B/op          1 allocs/op
 PASS
-ok      github.com/hyp3rd/go-again  42.193s
+ok      github.com/hyp3rd/go-again  40.390s
 ```
 
 ## Installation
@@ -99,7 +99,7 @@ func main() {
     retrier := again.NewRetrier(5, time.Millisecond*10, time.Second, time.Second)
 
     // Register a temporary error.
-    retrier.Registry.RegisterTemporaryError("temporary error", func() again.ITemporaryError {
+    retrier.Registry.RegisterTemporaryError("temporary error", func() again.TemporaryError {
         return fmt.Errorf("temporary error")
     })
 
