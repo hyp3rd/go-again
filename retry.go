@@ -61,18 +61,33 @@ type Retrier struct {
 	stop chan struct{}
 }
 
-// NewRetrier returns a new Retrier.
-func NewRetrier(maxRetries int, jitter time.Duration, interval time.Duration, timeout time.Duration) *Retrier {
-	return &Retrier{
-		MaxRetries: maxRetries,
-		Jitter:     jitter,
-		Interval:   interval,
-		Timeout:    timeout,
+// NewRetrier returns a new Retrier configured with the given options.
+// If no options are provided, the default options are used.
+// The default options are:
+//   - MaxRetries: 5
+//   - Jitter: 1 * time.Second
+//   - Interval: 500 * time.Millisecond
+//   - Timeout: 20 * time.Second
+func NewRetrier(opts ...Option) *Retrier {
+	// apply the default options.
+	r := &Retrier{
+		MaxRetries: 5,
+		Jitter:     1 * time.Second,
+		Interval:   500 * time.Millisecond,
+		Timeout:    20 * time.Second,
 		Registry:   NewRegistry(),
-		timer:      newTimerPool(maxRetries, timeout),
-		cancel:     make(chan struct{}, maxRetries),
-		stop:       make(chan struct{}, maxRetries),
 	}
+
+	// apply the options.
+	applyOptions(r, opts...)
+
+	// initialize the timer pool.
+	r.timer = newTimerPool(r.MaxRetries, r.Timeout)
+	// initialize the stop and cancel channels.
+	r.cancel = make(chan struct{}, r.MaxRetries)
+	r.stop = make(chan struct{}, r.MaxRetries)
+
+	return r
 }
 
 // SetRegistry sets the registry for temporary errors.
