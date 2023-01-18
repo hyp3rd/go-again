@@ -69,7 +69,7 @@ type Retrier struct {
 //   - Interval: 500 * time.Millisecond
 //   - Timeout: 20 * time.Second
 func NewRetrier(opts ...Option) *Retrier {
-	// apply the default options.
+	// initiate a Retrier with the defaults.
 	r := &Retrier{
 		MaxRetries: 5,
 		Jitter:     1 * time.Second,
