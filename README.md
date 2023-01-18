@@ -1,6 +1,7 @@
 # go-again
 
 [![Go](https://github.com/hyp3rd/go-again/actions/workflows/go.yml/badge.svg)][build-link] [![CodeQL](https://github.com/hyp3rd/go-again/actions/workflows/codeql.yml/badge.svg)][codeql-link]
+[![Codacy Security Scan](https://github.com/hyp3rd/go-again/actions/workflows/codacy.yml/badge.svg)][codacy-security-scan-link]
 
 `go-again` thrad-safely wraps a given function and executes it until it returns a nil error or exceeds the maximum number of retries.
 The configuration consists of the maximum number of retries, a jitter to add a randomized backoff, the timeout, and a registry to store errors that you consider temporary, hence worth a retry.
@@ -101,3 +102,4 @@ I'm a surfer, a crypto trader, and a software architect with 15 years of experie
 
 [build-link]: https://github.com/hyp3rd/go-again/actions/workflows/go.yml
 [codeql-link]:https://github.com/hyp3rd/go-again/actions/workflows/codeql.yml
+[codacy-security-scan-link]:https://github.com/hyp3rd/go-again/actions/workflows/codacy.yml
