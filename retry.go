@@ -51,8 +51,7 @@ type Retrier struct {
 	once sync.Once
 	// mutex is the mutex used to synchronize access to the timer.
 	mutex sync.RWMutex
-	// timer is the timer used to timeout the retry function.
-	// timer *time.Timer
+	// timer is the timer pool.
 	timer *timerPool
 	// err is the error returned by the retry function.
 	err error
@@ -70,10 +69,9 @@ func NewRetrier(maxRetries int, jitter time.Duration, interval time.Duration, ti
 		Interval:   interval,
 		Timeout:    timeout,
 		Registry:   NewRegistry(),
-		// timer:      time.NewTimer(timeout),
-		timer:  NewTimerPool(maxRetries, timeout),
-		cancel: make(chan struct{}),
-		stop:   make(chan struct{}),
+		timer:      newTimerPool(maxRetries, timeout),
+		cancel:     make(chan struct{}, maxRetries),
+		stop:       make(chan struct{}, maxRetries),
 	}
 }
 
@@ -100,16 +98,12 @@ func (r *Retrier) Retry(ctx context.Context, fn func() error, temporaryErrors ..
 		return errors.New("failed to invoke the function. It appears to be is nil")
 	}
 
-	// Create a new random number generator.
-	// rng is the random number generator used to apply jitter to the retry interval.
+	// `rng` is the random number generator used to apply jitter to the retry interval.
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-
-	// defer stop the timer for the timeout.
-	// defer r.timer.Stop()
 
 	// Retry the function until it returns a nil error or the maximum number of retries is reached.
 	for i := 0; i < r.MaxRetries; i++ {
-		// Call the function.
+		// Call the function to retry.
 		r.err = fn()
 
 		// If the function returns a nil error, return nil.
@@ -129,25 +123,21 @@ func (r *Retrier) Retry(ctx context.Context, fn func() error, temporaryErrors ..
 		default:
 		}
 
-		// Sleep for a random duration between interval and the jitter value.
-		// sleepDuration := time.Duration(float64(r.Interval) * (1 + rng.Float64()*float64(r.Jitter))
-		sleepDuration := time.Duration(rng.Int63n(int64(r.Jitter))) + r.Interval
+		// Set a retry random interval adding to the `Interval` a random duration between 0 and the `Jitter` value.
+		retryInterval := time.Duration(rng.Int63n(int64(r.Jitter))) + r.Interval
 
 		// Wait for the retry interval.
-		// r.timer.Reset(time.Duration(float64(r.Interval) * (1 + rng.Float64()*float64(r.Jitter))))
-
-		// Wait for the retry interval.
-		timer := r.timer.Get()
-		timer.Reset(sleepDuration)
+		timer := r.timer.get()
+		timer.Reset(retryInterval)
 		select {
 		case <-r.cancel:
-			r.timer.Put(timer)
+			r.timer.put(timer)
 			return fmt.Errorf("retries cancelled")
 		case <-r.stop:
-			r.timer.Put(timer)
+			r.timer.put(timer)
 			return r.err
 		case <-timer.C:
-			r.timer.Put(timer)
+			r.timer.put(timer)
 		}
 	}
 

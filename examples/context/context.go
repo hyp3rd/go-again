@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	// Create a context with a timeout of 5 seconds.
+	// Create a context with a timeout of 5 seconds. Adjust this to see the difference.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
