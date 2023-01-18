@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"os"
 	"sync"
-
-	"github.com/go-ldap/ldap/v3"
 )
 
 // ITemporaryError is an interface for temporary errors.
@@ -31,9 +29,6 @@ func NewRegistry() *registry {
 func (r *registry) LoadDefaults() *registry {
 	// Register default temporary errors.
 	defaults := map[string]func() ITemporaryError{
-		"ldap.Error": func() ITemporaryError {
-			return &ldap.Error{}
-		},
 		"os.SyscallError": func() ITemporaryError {
 			return &os.SyscallError{}
 		},
