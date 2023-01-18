@@ -134,17 +134,17 @@ func TestRegistry(t *testing.T) {
 //		}
 //	}
 func BenchmarkRetry(b *testing.B) {
-	r := NewRetrier(50, time.Millisecond*10, time.Second, time.Second)
+	r := NewRetrier(5, time.Millisecond*10, time.Second, time.Second)
 	r.Registry.RegisterTemporaryError("temporary error", func() ITemporaryError {
 		return errors.New("temporary error")
 	})
 
+	var retryCount int
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		var retryCount int
 		fn := func() error {
 			retryCount++
-			if retryCount < 3 {
+			if retryCount < 5 {
 				return errors.New("temporary error")
 			}
 			return nil

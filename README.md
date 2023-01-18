@@ -52,6 +52,21 @@ You can extend the list with your errors by calling the `RegisterTemporaryError`
 
 `go-again` is helpful in cases where you want to retry a function if it returns a temporary error, for example, when connecting to a database or a network service.
 
+## Performance
+
+A retrier certainly adds overhead to the execution of a function. `go-again` is designed to produce a minimal impact on the performance of your code, keeping thread safety and flexibility. The following benchmark shows the overhead of a retrier with 5 retries, 1s interval, 10ms jitter, and 1s timeout:
+
+```bash
+go test -bench=. -benchmem -benchtime=4s . -timeout 30m
+goos: darwin
+goarch: amd64
+pkg: github.com/hyp3rd/go-again
+cpu: Intel(R) Core(TM) i9-9880H CPU @ 2.30GHz
+BenchmarkRetry-16         490851          9098 ns/op        5376 B/op          1 allocs/op
+PASS
+ok      github.com/hyp3rd/go-again  42.193s
+```
+
 ## Installation
 
 ```bash
@@ -60,7 +75,12 @@ go get github.com/hyp3rd/go-again
 
 ## Usage
 
-For examples with cancellation, see [**examples**](./examples).
+For examples with cancellation, see [**examples**](./examples). To run the examples you can leverage the `Makefile`:
+
+```bash
+make run example=chan
+make run example=context
+```
 
 ### Retrier
 
