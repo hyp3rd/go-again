@@ -19,6 +19,9 @@ var (
 	}
 )
 
+// Function signature of retryable function
+type RetryableFunc func() error
+
 // RetryError is an error returned by the Retry function when the maximum number of retries is reached.
 type RetryError struct {
 	MaxRetries int
@@ -97,19 +100,25 @@ func (r *Retrier) SetRegistry(reg *registry) {
 	})
 }
 
-// Retry retries a function until it returns a nil error or the maximum number of retries is reached.
-func (r *Retrier) Retry(ctx context.Context, fn func() error, temporaryErrors ...string) error {
+// Retry retries a `retryableFunc` until it returns a nil error or the maximum number of retries is reached.
+//   - If the maximum number of retries is reached, the function returns a `RetryError` object.
+//   - If the `retryableFunc` returns a nil error, the function returns nil.
+//   - If the `retryableFunc` returns a temporary error, the function retries the function.
+//   - If the `retryableFunc` returns a non-temporary error, the function returns the error.
+//   - If the `temporaryErrors` list is empty, the function retries the function until the maximum number of retries is reached.
+//   - The context is used to cancel the retries, or set a deadline if the `retryableFunc` hangs.
+func (r *Retrier) Retry(ctx context.Context, retryableFunc RetryableFunc, temporaryErrors ...string) error {
 	// lock the mutex to synchronize access to the timer.
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
 
 	// If the maximum number of retries is 0, call the function once and return the result.
 	if r.MaxRetries == 0 {
-		return fn()
+		return retryableFunc()
 	}
 
 	// Check for invalid inputs.
-	if fn == nil {
+	if retryableFunc == nil {
 		return errors.New("failed to invoke the function. It appears to be is nil")
 	}
 
@@ -119,7 +128,7 @@ func (r *Retrier) Retry(ctx context.Context, fn func() error, temporaryErrors ..
 	// Retry the function until it returns a nil error or the maximum number of retries is reached.
 	for i := 0; i < r.MaxRetries; i++ {
 		// Call the function to retry.
-		r.err = fn()
+		r.err = retryableFunc()
 
 		// If the function returns a nil error, return nil.
 		if r.err == nil {
@@ -163,7 +172,7 @@ func (r *Retrier) Retry(ctx context.Context, fn func() error, temporaryErrors ..
 	return retryErr
 }
 
-// Cancel cancels the retries.
+// Cancel cancels the retries notifying the `Retry` function to return.
 func (r *Retrier) Cancel() {
 	r.once.Do(func() {
 		close(r.cancel)
