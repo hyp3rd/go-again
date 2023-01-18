@@ -1,0 +1,22 @@
+version: 1
+env:
+  - GO111MODULE=on
+  # https://stackoverflow.com/a/62821358/19407
+  - CGO_ENABLED=0
+
+flags:
+  - -trimpath
+  - -tags=netgo
+
+goos: linux
+goarch: amd64
+binary: scorecard-{{ .Os }}-{{ .Arch }}
+ldflags:
+  - -s {{ .Env.VERSION_LDFLAGS }}
+  - -X github.com/ossf/scorecard/v3/version.Version={{ .Env.VERSION }}
+  - -X github.com/ossf/scorecard/v3/version.Commit={{ .Env.COMMIT }}
+  - -X github.com/ossf/scorecard/v3/version.Date={{ .Env.DATE }}
+  - -X github.com/ossf/scorecard/v3/version.BuiltBy={{ .Env.BUILT_BY }}
+  - -X github.com/ossf/scorecard/v3/version.GoVersion={{ .Env.GO_VERSION }}
+  - -X github.com/ossf/scorecard/v3/version.SemVer={{ .Env.SEM_VER }}
+  - -X github.com/ossf/scorecard/v3/version.Sha={{ .Env.SHA }}
