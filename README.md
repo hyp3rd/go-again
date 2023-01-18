@@ -45,7 +45,7 @@ You should retry regardless of the error returned, and that's easy. It's enough 
     }
 ```
 
-It's also possible to create a Registry with the [**temporary default errors**](./registry.go?plain=1#L32):
+It's also possible to create a Registry with the [**temporary default errors**](./registry.go?plain=1#L26):
 `retrier.Registry.LoadDefaults()`.
 Bear in mind that the list can be extended with your own errors calling the `RegisterTemporaryError` method.
 
