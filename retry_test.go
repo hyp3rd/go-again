@@ -80,7 +80,7 @@ func TestRetryWithDefaults(t *testing.T) {
 
 // TestRegistry tests the registry.
 func TestRegistry(t *testing.T) {
-	r := &registry{}
+	r := NewRegistry()
 	r.RegisterTemporaryError("http.ErrAbortHandler", func() ITemporaryError {
 		return http.ErrAbortHandler
 	})

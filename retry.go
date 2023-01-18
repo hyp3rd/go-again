@@ -10,6 +10,7 @@ import (
 )
 
 var (
+	// retryErrorPool is a pool of RetryError objects.
 	retryErrorPool = sync.Pool{
 		New: func() interface{} {
 			return &RetryError{}
@@ -45,6 +46,8 @@ type Retrier struct {
 	Registry *registry
 	// once is used to ensure the registry is initialized only once.
 	once sync.Once
+	// timer is the timer used to timeout the retry function.
+	timer *time.Timer
 }
 
 // NewRetrier returns a new Retrier.
@@ -53,7 +56,8 @@ func NewRetrier(maxRetries int, jitter time.Duration, timeout time.Duration) *Re
 		MaxRetries: maxRetries,
 		Jitter:     jitter,
 		Timeout:    timeout,
-		Registry:   &registry{},
+		Registry:   NewRegistry(),
+		timer:      time.NewTimer(timeout),
 	}
 }
 
@@ -75,16 +79,13 @@ func (r *Retrier) Retry(fn func() error, temporaryErrors ...string) error {
 	if fn == nil {
 		return errors.New("fn cannot be nil")
 	}
-	if r.MaxRetries < 1 {
-		return errors.New("maxRetries must be at least 1")
-	}
 
 	// Create a new random number generator.
+	// rng is the random number generator used to apply jitter to the retry interval.
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 
-	// Create a timer for the timeout.
-	timer := time.NewTimer(r.Timeout)
-	defer timer.Stop()
+	// defer stop the timer for the timeout.
+	defer r.timer.Stop()
 
 	// Initialize a variable to store the error returned by the function.
 	var err error
@@ -107,7 +108,7 @@ func (r *Retrier) Retry(fn func() error, temporaryErrors ...string) error {
 		// Sleep for a random duration between 0 and the jitter value.
 		sleepDuration := time.Duration(rng.Int63n(int64(r.Jitter))) + 1
 		select {
-		case <-timer.C:
+		case <-r.timer.C:
 			// Return an error if the timeout is reached.
 			return fmt.Errorf("timeout reached after %v: %w", r.Timeout, err)
 		case <-time.After(sleepDuration):

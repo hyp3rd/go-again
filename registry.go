@@ -20,6 +20,13 @@ type registry struct {
 	storage sync.Map // store for temporary errors
 }
 
+// NewRegistry creates a new registry.
+func NewRegistry() *registry {
+	return &registry{
+		storage: sync.Map{},
+	}
+}
+
 // LoadDefaults loads the default temporary errors.
 func (r *registry) LoadDefaults() *registry {
 	// Register default temporary errors.
