@@ -46,6 +46,8 @@ type Retrier struct {
 	Registry *registry
 	// once is used to ensure the registry is initialized only once.
 	once sync.Once
+	// mutex is the mutex used to synchronize access to the timer.
+	mutex sync.RWMutex
 	// timer is the timer used to timeout the retry function.
 	timer *time.Timer
 }
@@ -70,6 +72,10 @@ func (r *Retrier) SetRegistry(reg *registry) {
 
 // Retry retries a function until it returns a nil error or the maximum number of retries is reached.
 func (r *Retrier) Retry(fn func() error, temporaryErrors ...string) error {
+	// lock the mutex to synchronize access to the timer.
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+
 	// If the maximum number of retries is 0, call the function once and return the result.
 	if r.MaxRetries == 0 {
 		return fn()

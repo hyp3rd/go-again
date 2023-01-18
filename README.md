@@ -2,7 +2,7 @@
 
 [![Go](https://github.com/hyp3rd/go-again/actions/workflows/go.yml/badge.svg)][build-link] [![CodeQL](https://github.com/hyp3rd/go-again/actions/workflows/codeql.yml/badge.svg)][codeql-link]
 
-`go-again` wraps a given function and executes it until it returns a nil error or exceeds the maximum number of retries.
+`go-again` thrad-safely wraps a given function and executes it until it returns a nil error or exceeds the maximum number of retries.
 The configuration consists of the maximum number of retries, a jitter to add a randomized backoff, the timeout, and a registry to store errors that you consider temporary, hence worth a retry.
 The `Retry` method takes a function and an optional list of `temporary errors` as arguments.
 The registry only allows you to retry a function if it returns a registered error:
