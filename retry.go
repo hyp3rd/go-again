@@ -50,6 +50,8 @@ type Retrier struct {
 	mutex sync.RWMutex
 	// timer is the timer used to timeout the retry function.
 	timer *time.Timer
+	// err is the error returned by the retry function.
+	err error
 }
 
 // NewRetrier returns a new Retrier.
@@ -93,21 +95,18 @@ func (r *Retrier) Retry(fn func() error, temporaryErrors ...string) error {
 	// defer stop the timer for the timeout.
 	defer r.timer.Stop()
 
-	// Initialize a variable to store the error returned by the function.
-	var err error
-
 	// Retry the function until it returns a nil error or the maximum number of retries is reached.
 	for i := 0; i < r.MaxRetries; i++ {
 		// Call the function.
-		err = fn()
+		r.err = fn()
 
 		// If the function returns a nil error, return nil.
-		if err == nil {
+		if r.err == nil {
 			return nil
 		}
 
 		// Check if the error returned by the function is temporary when the list of temporary errors is not empty.
-		if len(temporaryErrors) > 0 && !r.IsTemporaryError(err, temporaryErrors...) {
+		if len(temporaryErrors) > 0 && !r.IsTemporaryError(r.err, temporaryErrors...) {
 			break
 		}
 
@@ -116,7 +115,7 @@ func (r *Retrier) Retry(fn func() error, temporaryErrors ...string) error {
 		select {
 		case <-r.timer.C:
 			// Return an error if the timeout is reached.
-			return fmt.Errorf("timeout reached after %v: %w", r.Timeout, err)
+			return fmt.Errorf("timeout reached after %v: %w", r.Timeout, r.err)
 		case <-time.After(sleepDuration):
 			// Continue the loop if the sleep duration expires.
 		}
@@ -125,7 +124,7 @@ func (r *Retrier) Retry(fn func() error, temporaryErrors ...string) error {
 	// Return an error indicating that the maximum number of retries was reached.
 	retryErr := retryErrorPool.Get().(*RetryError)
 	retryErr.MaxRetries = r.MaxRetries
-	retryErr.Err = err
+	retryErr.Err = r.err
 	return retryErr
 }
 
