@@ -17,7 +17,7 @@ func TestRetry(t *testing.T) {
 
 	defer retrier.Registry.UnRegisterTemporaryError("http.ErrAbortHandler")
 
-	err := retrier.Retry(context.TODO(), func() error {
+	errs := retrier.Retry(context.TODO(), func() error {
 		retryCount++
 		if retryCount < 3 {
 			return http.ErrAbortHandler
@@ -25,8 +25,8 @@ func TestRetry(t *testing.T) {
 		return nil
 	}, "http.ErrAbortHandler")
 
-	if err != nil {
-		t.Errorf("retry returned an unexpected error: %v", err)
+	if errs.ExitError != nil {
+		t.Errorf("retry returned an unexpected error: %v", errs.ExitError)
 	}
 	if retryCount != 3 {
 		t.Errorf("retry did not retry the function the expected number of times. Got: %d, Expecting: %d", retryCount, 3)
@@ -38,7 +38,7 @@ func TestWithoutRegistry(t *testing.T) {
 	var retryCount int
 	retrier := NewRetrier()
 
-	err := retrier.Retry(context.TODO(), func() error {
+	errs := retrier.Retry(context.TODO(), func() error {
 		retryCount++
 		if retryCount < 3 {
 			return http.ErrAbortHandler
@@ -46,8 +46,8 @@ func TestWithoutRegistry(t *testing.T) {
 		return nil
 	})
 
-	if err != nil {
-		t.Errorf("retry returned an unexpected error: %v", err)
+	if errs.ExitError != nil {
+		t.Errorf("retry returned an unexpected error: %v", errs.ExitError)
 	}
 	if retryCount != 3 {
 		t.Errorf("retry did not retry the function the expected number of times. Got: %d, Expecting: %d", retryCount, 1)
@@ -62,7 +62,7 @@ func TestRetryWithDefaults(t *testing.T) {
 
 	defer retrier.Registry.Clean()
 
-	err := retrier.Retry(context.TODO(), func() error {
+	errs := retrier.Retry(context.TODO(), func() error {
 		retryCount++
 		if retryCount < 3 {
 			return http.ErrHandlerTimeout
@@ -70,8 +70,8 @@ func TestRetryWithDefaults(t *testing.T) {
 		return nil
 	}, "http.ErrHandlerTimeout")
 
-	if err != nil {
-		t.Errorf("retry returned an unexpected error: %v", err)
+	if errs.ExitError != nil {
+		t.Errorf("retry returned an unexpected error: %v", errs.ExitError)
 	}
 	if retryCount != 3 {
 		t.Errorf("retry did not retry the function the expected number of times. Got: %d, Expecting: %d", retryCount, 3)

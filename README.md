@@ -6,6 +6,18 @@
 `go-again` **thread safely** wraps a given function and executes it until it returns a nil error or exceeds the maximum number of retries.
 The configuration consists of the maximum number of retries, the interval, a jitter to add a randomized backoff, the timeout, and a registry to store errors that you consider temporary, hence worth a retry.
 The `Retry` method takes a context, a function, and an optional list of `temporary errors` as arguments. It supports cancellation from the context and a channel invoking the `Cancel()` function.
+The returned type is `RetryErrors` which contains the list of errors returned at each attempt and the last error returned by the function.
+
+```golang
+// RetryErrors holds the error returned by the retry function along with the trace of each attempt.
+type RetryErrors struct {
+    // Retries hold the trace of each attempt.
+    Retries map[int]error
+    // ExitError holds the last error returned by the retry function.
+    ExitError error
+}
+```
+
 The registry only allows you to retry a function if it returns a registered error:
 
 ```go
@@ -17,7 +29,7 @@ The registry only allows you to retry a function if it returns a registered erro
 
     defer retrier.Registry.UnRegisterTemporaryError("http.ErrAbortHandler")
     var retryCount int
-    err := retrier.Retry(context.TODO(), func() error {
+    errs := retrier.Retry(context.TODO(), func() error {
         retryCount++
         if retryCount < 3 {
             return http.ErrAbortHandler
@@ -25,7 +37,7 @@ The registry only allows you to retry a function if it returns a registered erro
         return nil
     }, "http.ErrAbortHandler")
 
-    if err != nil {
+    if errs.ExitError != nil {
         // handle error
     }
 ```
@@ -37,14 +49,14 @@ Should you retry regardless of the error returned, that's easy. It's enough call
     retrier := again.NewRetrier(again.WithTimeout(1*time.Second),
         again.WithJitter(500*time.Millisecond),
         again.WithMaxRetries(3))
-    err := retrier.Retry(context.TODO(), func() error {
+    errs := retrier.Retry(context.TODO(), func() error {
         retryCount++
         if retryCount < 3 {
             return http.ErrAbortHandler
         }
         return nil
     })
-    if err != nil {
+    if errs.ExitError != nil {
         // handle error
     }
 ```
@@ -109,11 +121,11 @@ func main() {
     })
 
     // Retry a function.
-    err := retrier.Retry(context.TODO(), func() error {
+    errs := retrier.Retry(context.TODO(), func() error {
         // Do something here.
         return fmt.Errorf("temporary error")
     }, "temporary error")
-    if err != nil {
+    if errs.ExitError != nil {
         fmt.Println(err)
     }
 }

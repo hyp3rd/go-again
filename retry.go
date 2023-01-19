@@ -3,18 +3,18 @@ package again
 import (
 	"context"
 	"errors"
-	"fmt"
 	"math/rand"
-	"strconv"
 	"sync"
 	"time"
 )
 
 var (
-	// retryErrorPool is a pool of RetryError objects.
-	retryErrorPool = sync.Pool{
+	// retryErrorsPool is a pool of RetryErrors objects.
+	retryErrorsPool = sync.Pool{
 		New: func() interface{} {
-			return &RetryError{}
+			return &RetryErrors{
+				Retries: make(map[int]error),
+			}
 		},
 	}
 )
@@ -22,20 +22,12 @@ var (
 // RetryableFunc signature of retryable function
 type RetryableFunc func() error
 
-// RetryError is an error returned by the Retry function when the maximum number of retries is reached.
-type RetryError struct {
-	MaxRetries int
-	Err        error
-}
-
-// Error returns the error message.
-func (e *RetryError) Error() string {
-	return "maximum number of retries (" + strconv.Itoa(e.MaxRetries) + ") reached: " + e.Err.Error()
-}
-
-// Unwrap returns the underlying error.
-func (e *RetryError) Unwrap() error {
-	return e.Err
+// RetryErrors holds the error returned by the retry function along with the trace of each attempt.
+type RetryErrors struct {
+	// Retries holds the trace of each attempt.
+	Retries map[int]error
+	// ExitError holds the last error returned by the retry function.
+	ExitError error
 }
 
 // Retrier is a type that retries a function until it returns a nil error or the maximum number of retries is reached.
@@ -94,46 +86,69 @@ func NewRetrier(opts ...Option) *Retrier {
 }
 
 // SetRegistry sets the registry for temporary errors.
-func (r *Retrier) SetRegistry(reg *registry) {
+// Use this function to set a custom registry if:
+// - you want to add custom temporary errors.
+// - you want to remove the default temporary errors.
+// - you want to replace the default temporary errors with your own.
+// - you have initialized the Retrier without using the constructor `NewRetrier`.
+func (r *Retrier) SetRegistry(reg *registry) error {
+	// set the registry if not nil.
+	if reg == nil {
+		return errors.New("registry cannot be nil")
+	}
+	// set the registry if not already set.
 	r.once.Do(func() {
 		r.Registry = reg
 	})
+	return nil
 }
 
 // Retry retries a `retryableFunc` until it returns a nil error or the maximum number of retries is reached.
 //   - If the maximum number of retries is reached, the function returns a `RetryError` object.
-//   - If the `retryableFunc` returns a nil error, the function returns nil.
+//   - If the `retryableFunc` returns a nil error, the function assigns a `RetryErrors.ExitError` before returning.
 //   - If the `retryableFunc` returns a temporary error, the function retries the function.
-//   - If the `retryableFunc` returns a non-temporary error, the function returns the error.
+//   - If the `retryableFunc` returns a non-temporary error, the function assigns the error to `RetryErrors.ExitError` and returns.
 //   - If the `temporaryErrors` list is empty, the function retries the function until the maximum number of retries is reached.
 //   - The context is used to cancel the retries, or set a deadline if the `retryableFunc` hangs.
-func (r *Retrier) Retry(ctx context.Context, retryableFunc RetryableFunc, temporaryErrors ...string) error {
+func (r *Retrier) Retry(ctx context.Context, retryableFunc RetryableFunc, temporaryErrors ...string) (errs *RetryErrors) {
 	// lock the mutex to synchronize access to the timer.
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
 
+	// get a new RetryErrors object from the pool.
+	errs = retryErrorsPool.Get().(*RetryErrors)
+	defer retryErrorsPool.Put(errs)
+
 	// If the maximum number of retries is 0, call the function once and return the result.
 	if r.MaxRetries == 0 {
-		return retryableFunc()
+		errs.ExitError = retryableFunc()
+		return
 	}
 
 	// Check for invalid inputs.
 	if retryableFunc == nil {
-		return errors.New("failed to invoke the function. It appears to be is nil")
+		errs.ExitError = errors.New("failed to invoke the function. It appears to be is nil")
+		return
 	}
 
 	// `rng` is the random number generator used to apply jitter to the retry interval.
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 
 	// Retry the function until it returns a nil error or the maximum number of retries is reached.
-	for i := 0; i < r.MaxRetries; i++ {
+	for attempt := 0; attempt < r.MaxRetries; attempt++ {
+		// Increment the attempt.
+
 		// Call the function to retry.
 		r.err = retryableFunc()
 
 		// If the function returns a nil error, return nil.
 		if r.err == nil {
-			return nil
+			errs.ExitError = nil
+			return
 		}
+
+		// Set the error returned by the function.
+		errs.Retries[attempt] = r.err
 
 		// Check if the error returned by the function is temporary when the list of temporary errors is not empty.
 		if len(temporaryErrors) > 0 && !r.IsTemporaryError(r.err, temporaryErrors...) {
@@ -143,7 +158,8 @@ func (r *Retrier) Retry(ctx context.Context, retryableFunc RetryableFunc, tempor
 		// Check if the context is cancelled.
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			errs.ExitError = ctx.Err()
+			return
 		default:
 		}
 
@@ -156,20 +172,18 @@ func (r *Retrier) Retry(ctx context.Context, retryableFunc RetryableFunc, tempor
 		select {
 		case <-r.cancel:
 			r.timer.put(timer)
-			return fmt.Errorf("retries cancelled")
+			errs.ExitError = errors.New("retries cancelled")
+			return
 		case <-r.stop:
 			r.timer.put(timer)
-			return r.err
+			errs.ExitError = errors.New("retries stopped")
+			return
 		case <-timer.C:
 			r.timer.put(timer)
 		}
 	}
 
-	// Return an error indicating that the maximum number of retries was reached.
-	retryErr := retryErrorPool.Get().(*RetryError)
-	retryErr.MaxRetries = r.MaxRetries
-	retryErr.Err = r.err
-	return retryErr
+	return
 }
 
 // Cancel cancels the retries notifying the `Retry` function to return.
