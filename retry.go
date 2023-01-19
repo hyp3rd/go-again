@@ -9,10 +9,10 @@ import (
 )
 
 var (
-	// retryErrorsPool is a pool of RetryErrors objects.
-	retryErrorsPool = sync.Pool{
+	// errorsPool is a pool of Errors objects.
+	errorsPool = sync.Pool{
 		New: func() interface{} {
-			return &RetryErrors{
+			return &Errors{
 				Retries: make(map[int]error),
 			}
 		},
@@ -22,12 +22,12 @@ var (
 // RetryableFunc signature of retryable function
 type RetryableFunc func() error
 
-// RetryErrors holds the error returned by the retry function along with the trace of each attempt.
-type RetryErrors struct {
+// Errors holds the error returned by the retry function along with the trace of each attempt.
+type Errors struct {
 	// Retries holds the trace of each attempt.
 	Retries map[int]error
-	// ExitError holds the last error returned by the retry function.
-	ExitError error
+	// Last holds the last error returned by the retry function.
+	Last error
 }
 
 // Retrier is a type that retries a function until it returns a nil error or the maximum number of retries is reached.
@@ -103,31 +103,31 @@ func (r *Retrier) SetRegistry(reg *registry) error {
 	return nil
 }
 
-// Retry retries a `retryableFunc` until it returns a nil error or the maximum number of retries is reached.
-//   - If the maximum number of retries is reached, the function returns a `RetryError` object.
-//   - If the `retryableFunc` returns a nil error, the function assigns a `RetryErrors.ExitError` before returning.
+// Do retries a `retryableFunc` until it returns a nil error or the maximum number of retries is reached.
+//   - If the maximum number of retries is reached, the function returns an `Errors` object.
+//   - If the `retryableFunc` returns a nil error, the function assigns an `Errors.Last` before returning.
 //   - If the `retryableFunc` returns a temporary error, the function retries the function.
-//   - If the `retryableFunc` returns a non-temporary error, the function assigns the error to `RetryErrors.ExitError` and returns.
+//   - If the `retryableFunc` returns a non-temporary error, the function assigns the error to `Errors.Last` and returns.
 //   - If the `temporaryErrors` list is empty, the function retries the function until the maximum number of retries is reached.
 //   - The context is used to cancel the retries, or set a deadline if the `retryableFunc` hangs.
-func (r *Retrier) Retry(ctx context.Context, retryableFunc RetryableFunc, temporaryErrors ...string) (errs *RetryErrors) {
+func (r *Retrier) Do(ctx context.Context, retryableFunc RetryableFunc, temporaryErrors ...string) (errs *Errors) {
 	// lock the mutex to synchronize access to the timer.
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
 
-	// get a new RetryErrors object from the pool.
-	errs = retryErrorsPool.Get().(*RetryErrors)
-	defer retryErrorsPool.Put(errs)
+	// get a new Errors object from the pool.
+	errs = errorsPool.Get().(*Errors)
+	defer errorsPool.Put(errs)
 
 	// If the maximum number of retries is 0, call the function once and return the result.
 	if r.MaxRetries == 0 {
-		errs.ExitError = retryableFunc()
+		errs.Last = retryableFunc()
 		return
 	}
 
 	// Check for invalid inputs.
 	if retryableFunc == nil {
-		errs.ExitError = errors.New("failed to invoke the function. It appears to be is nil")
+		errs.Last = errors.New("failed to invoke the function. It appears to be is nil")
 		return
 	}
 
@@ -143,7 +143,7 @@ func (r *Retrier) Retry(ctx context.Context, retryableFunc RetryableFunc, tempor
 
 		// If the function returns a nil error, return nil.
 		if r.err == nil {
-			errs.ExitError = nil
+			errs.Last = nil
 			return
 		}
 
@@ -158,7 +158,7 @@ func (r *Retrier) Retry(ctx context.Context, retryableFunc RetryableFunc, tempor
 		// Check if the context is cancelled.
 		select {
 		case <-ctx.Done():
-			errs.ExitError = ctx.Err()
+			errs.Last = ctx.Err()
 			return
 		default:
 		}
@@ -172,11 +172,11 @@ func (r *Retrier) Retry(ctx context.Context, retryableFunc RetryableFunc, tempor
 		select {
 		case <-r.cancel:
 			r.timer.put(timer)
-			errs.ExitError = errors.New("retries cancelled")
+			errs.Last = errors.New("retries cancelled")
 			return
 		case <-r.stop:
 			r.timer.put(timer)
-			errs.ExitError = errors.New("retries stopped")
+			errs.Last = errors.New("retries stopped")
 			return
 		case <-timer.C:
 			r.timer.put(timer)
@@ -186,7 +186,7 @@ func (r *Retrier) Retry(ctx context.Context, retryableFunc RetryableFunc, tempor
 	return
 }
 
-// Cancel cancels the retries notifying the `Retry` function to return.
+// Cancel cancels the retries notifying the `Do` function to return.
 func (r *Retrier) Cancel() {
 	r.once.Do(func() {
 		close(r.cancel)

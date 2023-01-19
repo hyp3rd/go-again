@@ -30,9 +30,9 @@ func main() {
 	}
 
 	// Retry the function.
-	errs := retrier.Retry(ctx, fn)
+	errs := retrier.Do(ctx, fn)
 
-	if errs.ExitError != nil {
+	if errs.Last != nil {
 		fmt.Println(errs)
 	} else {
 		fmt.Println("success")

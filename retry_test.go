@@ -17,7 +17,7 @@ func TestRetry(t *testing.T) {
 
 	defer retrier.Registry.UnRegisterTemporaryError("http.ErrAbortHandler")
 
-	errs := retrier.Retry(context.TODO(), func() error {
+	errs := retrier.Do(context.TODO(), func() error {
 		retryCount++
 		if retryCount < 3 {
 			return http.ErrAbortHandler
@@ -25,8 +25,8 @@ func TestRetry(t *testing.T) {
 		return nil
 	}, "http.ErrAbortHandler")
 
-	if errs.ExitError != nil {
-		t.Errorf("retry returned an unexpected error: %v", errs.ExitError)
+	if errs.Last != nil {
+		t.Errorf("retry returned an unexpected error: %v", errs.Last)
 	}
 	if retryCount != 3 {
 		t.Errorf("retry did not retry the function the expected number of times. Got: %d, Expecting: %d", retryCount, 3)
@@ -38,7 +38,7 @@ func TestWithoutRegistry(t *testing.T) {
 	var retryCount int
 	retrier := NewRetrier()
 
-	errs := retrier.Retry(context.TODO(), func() error {
+	errs := retrier.Do(context.TODO(), func() error {
 		retryCount++
 		if retryCount < 3 {
 			return http.ErrAbortHandler
@@ -46,8 +46,8 @@ func TestWithoutRegistry(t *testing.T) {
 		return nil
 	})
 
-	if errs.ExitError != nil {
-		t.Errorf("retry returned an unexpected error: %v", errs.ExitError)
+	if errs.Last != nil {
+		t.Errorf("retry returned an unexpected error: %v", errs.Last)
 	}
 	if retryCount != 3 {
 		t.Errorf("retry did not retry the function the expected number of times. Got: %d, Expecting: %d", retryCount, 1)
@@ -62,7 +62,7 @@ func TestRetryWithDefaults(t *testing.T) {
 
 	defer retrier.Registry.Clean()
 
-	errs := retrier.Retry(context.TODO(), func() error {
+	errs := retrier.Do(context.TODO(), func() error {
 		retryCount++
 		if retryCount < 3 {
 			return http.ErrHandlerTimeout
@@ -70,8 +70,8 @@ func TestRetryWithDefaults(t *testing.T) {
 		return nil
 	}, "http.ErrHandlerTimeout")
 
-	if errs.ExitError != nil {
-		t.Errorf("retry returned an unexpected error: %v", errs.ExitError)
+	if errs.Last != nil {
+		t.Errorf("retry returned an unexpected error: %v", errs.Last)
 	}
 	if retryCount != 3 {
 		t.Errorf("retry did not retry the function the expected number of times. Got: %d, Expecting: %d", retryCount, 3)
@@ -126,7 +126,7 @@ func TestRegistry(t *testing.T) {
 //				}
 //				return nil
 //			}
-//			err := r.Retry(fn, "temporary error").(*RetryError)
+//			err := r.Retry(fn, "temporary error").(*Errors)
 //			if err != nil || err.MaxRetries != 50 {
 //				b.Errorf("retry returned an unexpected error: %v", err)
 //			}
@@ -149,7 +149,7 @@ func BenchmarkRetry(b *testing.B) {
 			return nil
 		}
 		b.StartTimer()
-		r.Retry(context.TODO(), fn, "temporary error")
+		r.Do(context.TODO(), fn, "temporary error")
 		b.StopTimer()
 	}
 }
