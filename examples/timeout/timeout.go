@@ -11,7 +11,7 @@ import (
 
 func main() {
 	var retryCount int
-	retrier := again.NewRetrier(
+	retrier, _ := again.NewRetrier(
 		again.WithMaxRetries(3),
 		again.WithTimeout(1*time.Second), // change this to 5*time.Second to see the difference
 	)

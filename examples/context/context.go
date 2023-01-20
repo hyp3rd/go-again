@@ -14,7 +14,7 @@ func main() {
 	defer cancel()
 
 	// Create a retrier with a maximum of 3 retries, jitter of 0.5, and timeout of 1 second.
-	retrier := again.NewRetrier(again.WithTimeout(1*time.Second),
+	retrier, _ := again.NewRetrier(again.WithTimeout(1*time.Second),
 		again.WithJitter(500*time.Millisecond),
 		again.WithMaxRetries(3))
 
