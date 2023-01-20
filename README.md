@@ -72,8 +72,8 @@ Should you retry regardless of the error returned, that's easy. It's enough call
 It's also possible to create a Registry with the [**temporary default errors**](./registry.go?plain=1#L26):
 `retrier.Registry.LoadDefaults()`.
 You can extend the list with your errors by calling the `RegisterTemporaryError` method.
+
 **Walk through the [documentation](https://pkg.go.dev/github.com/hyp3rd/go-again@v1.0.8#section-documentation) for further details about the settings, the programmability, the implementation.**
-`go-again` is helpful in cases where you want to retry a function if it returns a temporary error, for example, when connecting to a database or a network service.
 
 ## Performance
 
