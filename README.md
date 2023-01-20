@@ -5,6 +5,7 @@
 
 `go-again` **thread safely** wraps a given function and executes it until it returns a nil error or exceeds the maximum number of retries.
 The configuration consists of the maximum number of retries, the interval, a jitter to add a randomized backoff, the timeout, and a registry to store errors that you consider temporary, hence worth a retry.
+
 The `Do` method takes a context, a function, and an optional list of `temporary errors` as arguments. It supports cancellation from the context and a channel invoking the `Cancel()` function.
 The returned type is `Errors` which contains the list of errors returned at each attempt and the last error returned by the function.
 
@@ -71,7 +72,7 @@ Should you retry regardless of the error returned, that's easy. It's enough call
 It's also possible to create a Registry with the [**temporary default errors**](./registry.go?plain=1#L26):
 `retrier.Registry.LoadDefaults()`.
 You can extend the list with your errors by calling the `RegisterTemporaryError` method.
-
+**Walk through the [documentation](https://pkg.go.dev/github.com/hyp3rd/go-again@v1.0.8#section-documentation) for further details about the settings, the programmability, the implementation.**
 `go-again` is helpful in cases where you want to retry a function if it returns a temporary error, for example, when connecting to a database or a network service.
 
 ## Performance
