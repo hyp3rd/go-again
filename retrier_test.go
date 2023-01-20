@@ -5,12 +5,13 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+	"time"
 )
 
 // TestRetry tests the retry function.
 func TestRetry(t *testing.T) {
 	var retryCount int
-	retrier := NewRetrier()
+	retrier, _ := NewRetrier()
 	retrier.Registry.RegisterTemporaryError("http.ErrAbortHandler", func() TemporaryError {
 		return http.ErrAbortHandler
 	})
@@ -36,7 +37,7 @@ func TestRetry(t *testing.T) {
 // TestWithoutRegistry tests the retry function without a registry.
 func TestWithoutRegistry(t *testing.T) {
 	var retryCount int
-	retrier := NewRetrier()
+	retrier, _ := NewRetrier()
 
 	errs := retrier.Do(context.TODO(), func() error {
 		retryCount++
@@ -57,7 +58,7 @@ func TestWithoutRegistry(t *testing.T) {
 // TestRetryWithDefaults tests the retry function with the default registry.
 func TestRetryWithDefaults(t *testing.T) {
 	var retryCount int
-	retrier := NewRetrier()
+	retrier, _ := NewRetrier()
 	retrier.Registry.LoadDefaults()
 
 	defer retrier.Registry.Clean()
@@ -78,6 +79,94 @@ func TestRetryWithDefaults(t *testing.T) {
 	}
 }
 
+func TestRetryTimeout(t *testing.T) {
+	var retryCount int
+	retrier, _ := NewRetrier(
+		WithTimeout(1 * time.Second),
+	)
+	retrier.Registry.RegisterTemporaryError("http.ErrAbortHandler", func() TemporaryError {
+		return http.ErrAbortHandler
+	})
+
+	defer retrier.Registry.UnRegisterTemporaryError("http.ErrAbortHandler")
+
+	errs := retrier.Do(context.TODO(), func() error {
+		retryCount++
+		if retryCount < 3 {
+			time.Sleep(2 * time.Second)
+			return http.ErrAbortHandler
+		}
+		return nil
+	}, "http.ErrAbortHandler")
+
+	if errs.Last == nil {
+		t.Errorf("was expecting a timeout error")
+	}
+	if retryCount != 1 {
+		t.Errorf("retry did not retry the function the expected number of times. Got: %d, Expecting: %d", retryCount, 1)
+	}
+
+}
+
+func TestRetryWithContextCancel(t *testing.T) {
+	var retryCount int
+	retrier, _ := NewRetrier(
+		WithTimeout(10 * time.Second),
+	)
+	retrier.Registry.RegisterTemporaryError("http.ErrAbortHandler", func() TemporaryError {
+		return http.ErrAbortHandler
+	})
+
+	defer retrier.Registry.UnRegisterTemporaryError("http.ErrAbortHandler")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errs := retrier.Do(ctx, func() error {
+		retryCount++
+		if retryCount < 3 {
+			time.Sleep(2 * time.Second)
+			cancel()
+			return http.ErrAbortHandler
+		}
+		return nil
+	}, "http.ErrAbortHandler")
+
+	if errs.Last == nil || !errors.Is(errs.Last, context.Canceled) {
+		t.Errorf("was expecting a %v error", context.Canceled)
+	}
+	if retryCount != 1 {
+		t.Errorf("retry did not retry the function the expected number of times. Got: %d, Expecting: %d", retryCount, 1)
+	}
+}
+
+func TestRetryWithChannelCancel(t *testing.T) {
+	var retryCount int
+	retrier, _ := NewRetrier(
+		WithTimeout(10 * time.Second),
+	)
+	retrier.Registry.RegisterTemporaryError("http.ErrAbortHandler", func() TemporaryError {
+		return http.ErrAbortHandler
+	})
+
+	defer retrier.Registry.UnRegisterTemporaryError("http.ErrAbortHandler")
+
+	errs := retrier.Do(context.Background(), func() error {
+		retryCount++
+		if retryCount < 3 {
+			time.Sleep(2 * time.Second)
+			retrier.Cancel()
+			return http.ErrAbortHandler
+		}
+		return nil
+	}, "http.ErrAbortHandler")
+
+	if errs.Last == nil || !errors.Is(errs.Last, ErrOperationCanceled) {
+		t.Errorf("was expecting a %v error", ErrOperationCanceled)
+	}
+	if retryCount != 1 {
+		t.Errorf("retry did not retry the function the expected number of times. Got: %d, Expecting: %d", retryCount, 1)
+	}
+}
+
 // TestRegistry tests the registry.
 func TestRegistry(t *testing.T) {
 	r := NewRegistry()
@@ -87,7 +176,7 @@ func TestRegistry(t *testing.T) {
 
 	defer r.UnRegisterTemporaryError("http.ErrAbortHandler")
 
-	retrier := NewRetrier()
+	retrier, _ := NewRetrier()
 	retrier.Registry = r
 
 	if retrier.IsTemporaryError(http.ErrAbortHandler, "http.ErrAbortHandler") != true {
@@ -109,31 +198,8 @@ func TestRegistry(t *testing.T) {
 	}
 }
 
-// func BenchmarkRetry(b *testing.B) {
-// 	r := NewRetrier(50, time.Millisecond*10, time.Second)
-// 	r.Registry.RegisterTemporaryError("temporary error", func() TemporaryError {
-// 		return errors.New("temporary error")
-// 	})
-
-//		b.ResetTimer()
-//		for i := 0; i < b.N; i++ {
-//			retryCount := i
-//			fn := func() error {
-//				retryCount++
-//				if retryCount < 50 {
-//					time.Sleep(time.Millisecond * 10)
-//					return errors.New("temporary error")
-//				}
-//				return nil
-//			}
-//			err := r.Retry(fn, "temporary error").(*Errors)
-//			if err != nil || err.MaxRetries != 50 {
-//				b.Errorf("retry returned an unexpected error: %v", err)
-//			}
-//		}
-//	}
 func BenchmarkRetry(b *testing.B) {
-	r := NewRetrier()
+	r, _ := NewRetrier()
 	r.Registry.RegisterTemporaryError("temporary error", func() TemporaryError {
 		return errors.New("temporary error")
 	})

@@ -1,6 +1,6 @@
 # test runs the Go tests for the current package and the tests package.
 test:
-	go test -v ./...
+	go test -v .
 
 # bench runs the benchmark tests in the benchmark subpackage of the tests package.
 bench:
