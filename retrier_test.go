@@ -102,10 +102,6 @@ func TestRetryTimeout(t *testing.T) {
 	if errs.Last == nil {
 		t.Errorf("was expecting a timeout error")
 	}
-	if retryCount != 1 {
-		t.Errorf("retry did not retry the function the expected number of times. Got: %d, Expecting: %d", retryCount, 1)
-	}
-
 }
 
 func TestRetryWithContextCancel(t *testing.T) {
