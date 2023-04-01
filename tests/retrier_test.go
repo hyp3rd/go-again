@@ -179,9 +179,9 @@ func TestDo(t *testing.T) {
 	}
 	r, _ = again.NewRetrier(again.WithMaxRetries(1))
 	errs = r.Do(context.Background(), retryableFunc, "temporary error")
-	failure := errs.Retries[r.MaxRetries]
+	failure := errs.Registry[r.MaxRetries]
 
-	expected := fmt.Sprintf("%v with error %v", again.ErrMaxRetriesReached, "temporary error")
+	expected := fmt.Sprintf("%v: with error: %v", again.ErrMaxRetriesReached, "temporary error")
 
 	if errs.Last == nil || failure.Error() != expected {
 		t.Errorf("expected error %q, but got %v", expected, failure)

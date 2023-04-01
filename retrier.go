@@ -15,7 +15,7 @@ var (
 	errorsPool = sync.Pool{
 		New: func() interface{} {
 			return &Errors{
-				Retries: make(map[int]error),
+				Registry: make(map[int]error),
 			}
 		},
 	}
@@ -37,8 +37,8 @@ type RetryableFunc func() error
 
 // Errors holds the error returned by the retry function along with the trace of each attempt.
 type Errors struct {
-	// Retries holds the trace of each attempt.
-	Retries map[int]error
+	// Registry holds the trace of each attempt.
+	Registry map[int]error
 	// Last holds the last error returned by the retry function.
 	Last error
 }
@@ -194,7 +194,7 @@ func (r *Retrier) Do(ctx context.Context, retryableFunc RetryableFunc, temporary
 		}
 
 		// Set the error returned by the function.
-		errs.Retries[attempt] = r.err
+		errs.Registry[attempt] = r.err
 
 		// Check if the error returned by the function is temporary when the list of temporary errors is not empty.
 		if len(temporaryErrors) > 0 && !r.IsTemporaryError(r.err, temporaryErrors...) {
@@ -229,14 +229,13 @@ func (r *Retrier) Do(ctx context.Context, retryableFunc RetryableFunc, temporary
 		case <-timer.C: // Wait for the retry interval.
 			r.timer.Put(timer)
 		case <-timeoutTimer.C: // Check if the timeout is reached.
-			// errs.Last = fmt.Errorf("%v at attempt %v with error %w", ErrTimeoutReached, attempt, r.err)
 			errs.Last = fmt.Errorf("attempt %v: %w: %v", attempt, ErrTimeoutReached, r.err)
 			return
 		}
 	}
 
 	// If the maximum number of retries is reached register the last attempt error.
-	errs.Retries[r.MaxRetries] = fmt.Errorf("%v with error %w", ErrMaxRetriesReached, r.err)
+	errs.Registry[r.MaxRetries] = fmt.Errorf("%w: with error: %v", ErrMaxRetriesReached, r.err)
 
 	// Register the last error returned by the function as the last error and return.
 	errs.Last = r.err
