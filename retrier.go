@@ -58,7 +58,7 @@ type Retrier struct {
 	// Timeout is the timeout for the retry function.
 	Timeout time.Duration
 	// Registry is the registry for temporary errors.
-	Registry *registry
+	Registry *Registry
 	// once is used to ensure the registry is initialized only once.
 	once sync.Once
 	// mutex is the mutex used to synchronize access to the timer.
@@ -135,7 +135,7 @@ func (r *Retrier) Validate() error {
 // - you want to remove the default temporary errors.
 // - you want to replace the default temporary errors with your own.
 // - you have initialized the Retrier without using the constructor `NewRetrier`.
-func (r *Retrier) SetRegistry(reg *registry) error {
+func (r *Retrier) SetRegistry(reg *Registry) error {
 	// set the registry if not nil.
 	if reg == nil {
 		return errors.New("registry cannot be nil")

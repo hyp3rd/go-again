@@ -22,13 +22,13 @@ func newTimerPool(size int, timeout time.Duration) *timerPool {
 	return pool
 }
 
-// Get gets a timer from the pool.
+// Get retrieves a timer from the pool.
 func (p *timerPool) get() *time.Timer {
 	// Get a timer from the pool.
 	return <-p.ch
 }
 
-// Put puts a timer back into the pool.
+// Put returns a timer back into the pool.
 func (p *timerPool) put(t *time.Timer) {
 	// Stop the timer and put it back into the pool.
 	t.Stop()
