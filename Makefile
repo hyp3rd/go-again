@@ -1,10 +1,10 @@
 # test runs the Go tests for the current package and the tests package.
 test:
-	go test -v .
+	go test -v ./tests
 
 # bench runs the benchmark tests in the benchmark subpackage of the tests package.
 bench:
-	go test -bench=. -benchmem -benchtime=4s . -timeout 30m
+	go test -bench=./tests -benchmem -benchtime=4s . -timeout 30m
 
 # vet runs the Go vet static analysis tool on all packages in the project.
 vet:

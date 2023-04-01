@@ -23,7 +23,7 @@ func NewRegistry() *Registry {
 	}
 }
 
-// LoadDefaults loads the default temporary errors.
+// LoadDefaults loads the default temporary errors into the registry.
 func (r *Registry) LoadDefaults() *Registry {
 	// Register default temporary errors.
 	defaults := map[string]func() TemporaryError{
@@ -81,6 +81,9 @@ func (r *Registry) UnRegisterTemporaryErrors(temporaryErrors map[string]func() T
 // GetTemporaryError returns a temporary error by name.
 func (r *Registry) GetTemporaryError(name string) (TemporaryError, bool) {
 	tempErr, ok := r.storage.Load(name)
+	if !ok {
+		return nil, false
+	}
 
 	return tempErr.(TemporaryError), ok
 }
@@ -104,7 +107,7 @@ func (r *Registry) GetTemporaryErrors(names ...string) []TemporaryError {
 func (r *Registry) ListTemporaryErrors() []TemporaryError {
 	var errors []TemporaryError
 
-	r.storage.Range(func(key, value any) bool {
+	r.storage.Range(func(key, value interface{}) bool {
 		errors = append(errors, value.(TemporaryError))
 		return true
 	})
@@ -114,7 +117,7 @@ func (r *Registry) ListTemporaryErrors() []TemporaryError {
 
 // Clean cleans the Registry.
 func (r *Registry) Clean() {
-	r.storage.Range(func(key, value any) bool {
+	r.storage.Range(func(key, value interface{}) bool {
 		r.storage.Delete(key)
 		return true
 	})
