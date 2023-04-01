@@ -26,8 +26,6 @@ var (
 	ErrMaxRetriesReached = errors.New("maximum number of retries reached")
 	// ErrTimeoutReached is the error returned when the timeout is reached.
 	ErrTimeoutReached = fmt.Errorf("operation timeout reached")
-	// ErrOperationCanceled is the error returned when the retry is canceled.
-	ErrOperationCanceled = fmt.Errorf("retry canceled invoking the `Cancel` function")
 	// ErrOperationStopped is the error returned when the retry is stopped.
 	ErrOperationStopped = fmt.Errorf("operation stopped")
 	// ErrNilRetryableFunc is the error returned when the retryable function is nil.
@@ -120,7 +118,7 @@ func (r *Retrier) Validate() error {
 	if r.Interval >= r.Timeout {
 		return fmt.Errorf("%w: the interval %s should be less than timeout %s", ErrInvalidRetrier, r.Interval, r.Timeout)
 	}
-	if r.Interval*time.Duration(r.MaxRetries) > r.Timeout {
+	if r.Interval*time.Duration(r.MaxRetries) >= r.Timeout {
 		return fmt.Errorf("%w: the interval %s multiplied by max retries %d should be less than timeout %s", ErrInvalidRetrier, r.Interval, r.MaxRetries, r.Timeout)
 	}
 	if r.BackoffFactor <= 1 {
@@ -214,11 +212,12 @@ func (r *Retrier) Do(ctx context.Context, retryableFunc RetryableFunc, temporary
 
 		// Wait for the retry interval.
 		timer := r.timer.Get()
+		// Adjust the timer to the retry interval including the jitter and backoff.
 		timer.Reset(retryInterval)
 		select {
 		case <-r.cancel: // Check if the retries are cancelled.
 			r.timer.Put(timer)
-			errs.Last = ErrOperationCanceled
+			errs.Last = ErrOperationStopped
 			return
 		case <-r.stop:
 			r.timer.Put(timer)
@@ -236,8 +235,11 @@ func (r *Retrier) Do(ctx context.Context, retryableFunc RetryableFunc, temporary
 		}
 	}
 
-	// If the maximum number of retries is reached, return the errors.
-	errs.Last = fmt.Errorf("%v with error %w", ErrMaxRetriesReached, r.err)
+	// If the maximum number of retries is reached register the last attempt error.
+	errs.Retries[r.MaxRetries] = fmt.Errorf("%v with error %w", ErrMaxRetriesReached, r.err)
+
+	// Register the last error returned by the function as the last error and return.
+	errs.Last = r.err
 	return
 }
 
