@@ -26,6 +26,13 @@ func WithJitter(jitter time.Duration) Option {
 	}
 }
 
+// WithBackoffFactor returns an option that sets the backoff factor.
+func WithBackoffFactor(factor float64) Option {
+	return func(retrier *Retrier) {
+		retrier.BackoffFactor = factor
+	}
+}
+
 // WithInterval returns an option that sets the interval.
 func WithInterval(interval time.Duration) Option {
 	return func(retrier *Retrier) {

@@ -13,7 +13,7 @@ func main() {
 	var retryCount int
 	retrier, _ := again.NewRetrier(
 		again.WithMaxRetries(3),
-		again.WithTimeout(1*time.Second), // change this to 5*time.Second to see the difference
+		again.WithTimeout(2*time.Second), // change this to 5*time.Second to see the difference
 	)
 	retrier.Registry.RegisterTemporaryError("http.ErrAbortHandler", func() again.TemporaryError {
 		return http.ErrAbortHandler

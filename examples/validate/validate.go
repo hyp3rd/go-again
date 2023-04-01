@@ -15,6 +15,8 @@ func main() {
 
 	if err != nil {
 		fmt.Println(err)
+	} else {
+		fmt.Println("success")
 	}
 
 	_, err = again.NewRetrier(
@@ -24,5 +26,7 @@ func main() {
 	)
 	if err != nil {
 		fmt.Println(err)
+	} else {
+		fmt.Println("success")
 	}
 }
