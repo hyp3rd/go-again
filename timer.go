@@ -1,36 +1,67 @@
 package again
 
-import "time"
+import (
+	"time"
+)
 
-// timerPool is a pool of timers.
-type timerPool struct {
-	ch chan *time.Timer
+// TimerPool is a pool of timers.
+type TimerPool struct {
+	ch       chan *time.Timer // Channel of timers.
+	duration time.Duration    // Duration of the timers.
 }
 
-// newTimerPool creates a new timer pool.
-func newTimerPool(size int, timeout time.Duration) *timerPool {
+// NewTimerPool creates a new timer pool.
+func NewTimerPool(size int, timeout time.Duration) *TimerPool {
 	// Create the pool.
-	pool := &timerPool{
-		ch: make(chan *time.Timer, size),
+	pool := &TimerPool{
+		ch:       make(chan *time.Timer, size),
+		duration: timeout,
 	}
 	// Create timers and put them into the pool.
 	for i := 0; i < size; i++ {
 		t := time.NewTimer(timeout)
-		t.Stop()
+		t.Stop()         // Stop the timer.
+		t.Reset(timeout) // Reset the timer before adding it to the channel
+		// Put the timer into the pool.
 		pool.ch <- t
 	}
 	return pool
 }
 
 // Get retrieves a timer from the pool.
-func (p *timerPool) get() *time.Timer {
+func (p *TimerPool) Get() *time.Timer {
 	// Get a timer from the pool.
 	return <-p.ch
 }
 
 // Put returns a timer back into the pool.
-func (p *timerPool) put(t *time.Timer) {
-	// Stop the timer and put it back into the pool.
+func (p *TimerPool) Put(t *time.Timer) {
+	// Stop the timer.
 	t.Stop()
-	p.ch <- t
+	t.Reset(p.duration) // Reset the timer before returning it to the channel
+
+	select {
+	case p.ch <- t:
+		// Timer was successfully put back into the pool.
+	default:
+		// Timer pool is full, discard the timer.
+	}
+}
+
+// Close closes the pool.
+func (p *TimerPool) Close() {
+	// Close the channel.
+	close(p.ch)
+}
+
+// Drain drains the pool.
+func (p *TimerPool) Drain() {
+	// Drain the channel.
+	for range p.ch {
+	}
+}
+
+// Len returns the number of timers in the pool.
+func (p *TimerPool) Len() int {
+	return len(p.ch)
 }

@@ -64,7 +64,7 @@ type Retrier struct {
 	// mutex is the mutex used to synchronize access to the timer.
 	mutex sync.RWMutex
 	// timer is the timer pool.
-	timer *timerPool
+	timer *TimerPool
 	// err is the error returned by the retry function.
 	err error
 	// cancel is a channel used to cancel the retries.
@@ -100,7 +100,7 @@ func NewRetrier(opts ...Option) (r *Retrier, err error) {
 	}
 
 	// initialize the timer pool.
-	r.timer = newTimerPool(r.MaxRetries, r.Timeout)
+	r.timer = NewTimerPool(r.MaxRetries, r.Timeout)
 	// initialize the stop and cancel channels.
 	r.cancel = make(chan struct{}, r.MaxRetries)
 	r.stop = make(chan struct{}, r.MaxRetries)
@@ -180,8 +180,8 @@ func (r *Retrier) Do(ctx context.Context, retryableFunc RetryableFunc, temporary
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 
 	// Start the timeout timer.
-	timeoutTimer := r.timer.get()
-	defer r.timer.put(timeoutTimer)
+	timeoutTimer := r.timer.Get()
+	defer r.timer.Put(timeoutTimer)
 	timeoutTimer.Reset(r.Timeout)
 
 	// Retry the function until it returns a nil error or the maximum number of retries is reached.
@@ -213,22 +213,22 @@ func (r *Retrier) Do(ctx context.Context, retryableFunc RetryableFunc, temporary
 		retryInterval := backoffDuration + jitterDuration
 
 		// Wait for the retry interval.
-		timer := r.timer.get()
+		timer := r.timer.Get()
 		timer.Reset(retryInterval)
 		select {
 		case <-r.cancel: // Check if the retries are cancelled.
-			r.timer.put(timer)
+			r.timer.Put(timer)
 			errs.Last = ErrOperationCanceled
 			return
 		case <-r.stop:
-			r.timer.put(timer)
+			r.timer.Put(timer)
 			errs.Last = ErrOperationStopped
 			return
 		case <-ctx.Done(): // Check if the context is cancelled.
 			errs.Last = ctx.Err()
 			return
 		case <-timer.C: // Wait for the retry interval.
-			r.timer.put(timer)
+			r.timer.Put(timer)
 		case <-timeoutTimer.C: // Check if the timeout is reached.
 			// errs.Last = fmt.Errorf("%v at attempt %v with error %w", ErrTimeoutReached, attempt, r.err)
 			errs.Last = fmt.Errorf("attempt %v: %w: %v", attempt, ErrTimeoutReached, r.err)
