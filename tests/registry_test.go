@@ -58,15 +58,15 @@ func TestRegistryIsTemporaryError(t *testing.T) {
 	retrier, _ := again.NewRetrier()
 	retrier.Registry = r
 
-	if retrier.IsTemporaryError(http.ErrAbortHandler, "http.ErrAbortHandler") != true {
+	if retrier.Registry.IsTemporaryError(http.ErrAbortHandler, "http.ErrAbortHandler") != true {
 		t.Errorf("registry failed to register a temporary error")
 	}
 
-	if retrier.IsTemporaryError(http.ErrSkipAltProtocol, "http.ErrHandlerTimeout") != false {
+	if retrier.Registry.IsTemporaryError(http.ErrSkipAltProtocol, "http.ErrHandlerTimeout") != false {
 		t.Errorf("registry failed to validate temporary error")
 	}
 
-	if retrier.IsTemporaryError(http.ErrAbortHandler, "http.ErrHandlerTimeout") != false {
+	if retrier.Registry.IsTemporaryError(http.ErrAbortHandler, "http.ErrHandlerTimeout") != false {
 		t.Errorf("registry failed to validate temporary error")
 	}
 }

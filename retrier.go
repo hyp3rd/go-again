@@ -197,7 +197,7 @@ func (r *Retrier) Do(ctx context.Context, retryableFunc RetryableFunc, temporary
 		errs.Registry[attempt] = r.err
 
 		// Check if the error returned by the function is temporary when the list of temporary errors is not empty.
-		if len(temporaryErrors) > 0 && !r.IsTemporaryError(r.err, temporaryErrors...) {
+		if len(temporaryErrors) > 0 && !r.Registry.IsTemporaryError(r.err, temporaryErrors...) {
 			break
 		}
 
@@ -249,13 +249,13 @@ func (r *Retrier) Cancel() {
 	})
 }
 
-// IsTemporaryError checks if the error is in the list of temporary errors.
-func (r *Retrier) IsTemporaryError(err error, names ...string) bool {
-	tempErrors := r.Registry.GetTemporaryErrors(names...)
-	for _, tempErr := range tempErrors {
-		if errors.Is(tempErr, err) && err.Error() == tempErr.Error() {
-			return true
-		}
-	}
-	return false
-}
+// // IsTemporaryError checks if the error is in the list of temporary errors.
+// func (r *Retrier) IsTemporaryError(err error, names ...string) bool {
+// 	tempErrors := r.Registry.GetTemporaryErrors(names...)
+// 	for _, tempErr := range tempErrors {
+// 		if errors.Is(tempErr, err) && err.Error() == tempErr.Error() {
+// 			return true
+// 		}
+// 	}
+// 	return false
+// }

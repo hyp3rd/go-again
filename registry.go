@@ -2,6 +2,7 @@ package again
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"os"
@@ -121,4 +122,22 @@ func (r *Registry) Clean() {
 		r.storage.Delete(key)
 		return true
 	})
+}
+
+// IsTemporaryError checks if the error is in the list of temporary errors.
+func (r *Registry) IsTemporaryError(err error, errorsList ...string) bool {
+	var tempErrors []TemporaryError
+
+	if errorsList == nil {
+		tempErrors = r.ListTemporaryErrors()
+	} else {
+		tempErrors = r.GetTemporaryErrors(errorsList...)
+	}
+
+	for _, tempErr := range tempErrors {
+		if errors.Is(tempErr, err) && err.Error() == tempErr.Error() {
+			return true
+		}
+	}
+	return false
 }
