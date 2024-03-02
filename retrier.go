@@ -248,14 +248,3 @@ func (r *Retrier) Cancel() {
 		close(r.cancel)
 	})
 }
-
-// // IsTemporaryError checks if the error is in the list of temporary errors.
-// func (r *Retrier) IsTemporaryError(err error, names ...string) bool {
-// 	tempErrors := r.Registry.GetTemporaryErrors(names...)
-// 	for _, tempErr := range tempErrors {
-// 		if errors.Is(tempErr, err) && err.Error() == tempErr.Error() {
-// 			return true
-// 		}
-// 	}
-// 	return false
-// }
