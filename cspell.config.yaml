@@ -1,0 +1,23 @@
+---
+version: "0.2"
+ignorePaths: []
+dictionaryDefinitions: []
+dictionaries: []
+words:
+  - cyclop
+  - daixiang
+  - ewrap
+  - GITVERSION
+  - GOFILES
+  - gofumpt
+  - gosec
+  - honnef
+  - mvdan
+  - nolint
+  - NOVENDOR
+  - Retryable
+  - staticcheck
+  - venv
+  - Wrapf
+ignoreWords: []
+import: []

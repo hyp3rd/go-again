@@ -186,7 +186,6 @@ func TestDo(t *testing.T) {
 	if errs.Last == nil || failure.Error() != expected {
 		t.Errorf("expected error %q, but got %v", expected, failure)
 	}
-
 }
 
 // func TestTimeout(t *testing.T) {

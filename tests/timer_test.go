@@ -60,7 +60,6 @@ func TestTimerPool(t *testing.T) {
 			t.Error("timer is not nil, expected nil")
 		}
 	}
-
 }
 
 func TestTimerPool_PutClosed(t *testing.T) {

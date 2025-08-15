@@ -7,8 +7,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/hyp3rd/go-again"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/hyp3rd/go-again"
 )
 
 func TestRegistry(t *testing.T) {

@@ -2,31 +2,39 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/hyp3rd/go-again"
 )
 
+const (
+	maxRetries = 3
+	jitter     = 4 * time.Second
+	timeout    = 5 * time.Second
+)
+
 func main() {
 	_, err := again.NewRetrier(
-		again.WithMaxRetries(3),
-		again.WithTimeout(1*time.Second), // change this to 5*time.Second to see the difference
+		again.WithMaxRetries(maxRetries),
+		again.WithTimeout(time.Second), // change this to 5*time.Second to see the difference
 	)
-
 	if err != nil {
-		fmt.Println(err)
+		fmt.Fprintln(os.Stderr, err)
 	} else {
-		fmt.Println("success")
+		fmt.Fprintln(os.Stdout, "success")
 	}
 
 	_, err = again.NewRetrier(
-		again.WithMaxRetries(3),
-		again.WithJitter(4*time.Second),
-		again.WithTimeout(5*time.Second), // change this to 5*time.Second to see the difference
+		again.WithMaxRetries(maxRetries),
+		again.WithJitter(jitter),
+		again.WithTimeout(timeout), // change this to 5*time.Second to see the difference
 	)
 	if err != nil {
-		fmt.Println(err)
-	} else {
-		fmt.Println("success")
+		fmt.Fprintln(os.Stderr, err)
+
+		return
 	}
+
+	fmt.Fprintln(os.Stdout, "success")
 }
