@@ -13,6 +13,7 @@ words:
   - gosec
   - honnef
   - mvdan
+  - Newf
   - nolint
   - NOVENDOR
   - Retryable
