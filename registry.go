@@ -53,9 +53,9 @@ func (r *Registry) LoadDefaults() *Registry {
 	return r
 }
 
-// RegisterTemporaryError registers a temporary error.
+// RegisterTemporaryError registers a single temporary error.
 func (r *Registry) RegisterTemporaryError(name string, fn func() TemporaryError) {
-	r.storage.Store(name, fn())
+	r.RegisterTemporaryErrors(map[string]func() TemporaryError{name: fn})
 }
 
 // RegisterTemporaryErrors registers multiple temporary errors.
@@ -65,7 +65,7 @@ func (r *Registry) RegisterTemporaryErrors(temporaryErrors map[string]func() Tem
 	}
 }
 
-// UnRegisterTemporaryError unregisters a temporary error(s).
+// UnRegisterTemporaryError unregisters one or more temporary errors by name.
 func (r *Registry) UnRegisterTemporaryError(names ...string) {
 	for _, name := range names {
 		r.storage.Delete(name)
@@ -74,9 +74,11 @@ func (r *Registry) UnRegisterTemporaryError(names ...string) {
 
 // UnRegisterTemporaryErrors unregisters multiple temporary errors.
 func (r *Registry) UnRegisterTemporaryErrors(temporaryErrors map[string]func() TemporaryError) {
+	names := make([]string, 0, len(temporaryErrors))
 	for name := range temporaryErrors {
-		r.storage.Delete(name)
+		names = append(names, name)
 	}
+	r.UnRegisterTemporaryError(names...)
 }
 
 // GetTemporaryError returns a temporary error by name.
