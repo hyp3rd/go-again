@@ -22,7 +22,7 @@ func main() {
 	defer cancel()
 
 	// Create a retrier with a maximum of 3 retries, jitter of 0.5, and timeout of 3 second.
-	retrier, err := again.NewRetrier(again.WithTimeout(retrierTimeout),
+	retrier, err := again.NewRetrier(context.Background(), again.WithTimeout(retrierTimeout),
 		again.WithJitter(jitter),
 		again.WithMaxRetries(maxRetries))
 	if err != nil {

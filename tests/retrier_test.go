@@ -14,7 +14,7 @@ import (
 )
 
 func TestNewRetrier(t *testing.T) {
-	r, err := again.NewRetrier()
+	r, err := again.NewRetrier(context.Background())
 	if err != nil {
 		t.Errorf("failed to create new Retrier: %v", err)
 	}
@@ -41,6 +41,7 @@ func TestNewRetrier(t *testing.T) {
 
 	// Test setting options.
 	r, err = again.NewRetrier(
+		context.Background(),
 		again.WithMaxRetries(10),
 		again.WithJitter(2*time.Second),
 		again.WithBackoffFactor(3),
@@ -67,7 +68,7 @@ func TestNewRetrier(t *testing.T) {
 	}
 
 	// Test invalid options.
-	_, err = again.NewRetrier(
+	_, err = again.NewRetrier(context.Background(),
 		again.WithMaxRetries(-1),
 	)
 	if err == nil {
@@ -147,7 +148,7 @@ func TestDo(t *testing.T) {
 	retryableFunc := func() error {
 		return nil
 	}
-	r, _ := again.NewRetrier()
+	r, _ := again.NewRetrier(context.Background())
 	errs := r.Do(context.Background(), retryableFunc)
 	if errs.Last != nil {
 		t.Errorf("unexpected error: %v", errs.Last)
@@ -180,7 +181,7 @@ func TestDo(t *testing.T) {
 	retryableFunc = func() error {
 		return tempErr
 	}
-	r, _ = again.NewRetrier(again.WithMaxRetries(1))
+	r, _ = again.NewRetrier(context.Background(), again.WithMaxRetries(1))
 	errs = r.Do(context.Background(), retryableFunc, tempErr)
 	failure := errs.Attempts[len(errs.Attempts)-1]
 
@@ -191,27 +192,10 @@ func TestDo(t *testing.T) {
 	}
 }
 
-// func TestTimeout(t *testing.T) {
-// 	// Test timeout.
-// 	retryableFunc := func() error {
-// 		time.Sleep(3 * time.Second)
-// 		return errors.New("temporary error")
-// 	}
-// 	r, _ := again.NewRetrier(again.WithTimeout(1*time.Second), again.WithMaxRetries(3))
-// 	errs := r.Do(context.Background(), retryableFunc, "temporary error")
-// 	failure := errs.Retries[r.MaxRetries]
-
-// 	expected := fmt.Sprintf("%v with error %v", again.ErrTimeoutReached, "temporary error")
-
-// 	if errs.Last == nil || failure.Error() != expected {
-// 		t.Errorf("expected error %q, but got %v", expected, failure)
-// 	}
-// }
-
 // Test stop retries.
 func TestStopRetries(t *testing.T) {
 	// Create a new Retrier with a small interval to speed up the test.
-	r, err := again.NewRetrier(again.WithInterval(10*time.Millisecond), again.WithTimeout(5*time.Second))
+	r, err := again.NewRetrier(context.Background(), again.WithInterval(10*time.Millisecond), again.WithTimeout(5*time.Second))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -247,7 +231,7 @@ func TestStopRetries(t *testing.T) {
 // TestWithoutRegistry tests the retry function without a registry.
 func TestWithoutRegistry(t *testing.T) {
 	var retryCount int
-	retrier, _ := again.NewRetrier()
+	retrier, _ := again.NewRetrier(context.Background())
 
 	errs := retrier.Do(context.TODO(), func() error {
 		retryCount++
@@ -268,7 +252,7 @@ func TestWithoutRegistry(t *testing.T) {
 // TestRetryWithDefaults tests the retry function with the default registry.
 func TestRetryWithDefaults(t *testing.T) {
 	var retryCount int
-	retrier, _ := again.NewRetrier()
+	retrier, _ := again.NewRetrier(context.Background())
 	retrier.Registry.LoadDefaults()
 
 	defer retrier.Registry.Clean()
@@ -292,7 +276,8 @@ func TestRetryWithDefaults(t *testing.T) {
 func TestRetryTimeout(t *testing.T) {
 	var retryCount int
 	retrier, _ := again.NewRetrier(
-		again.WithTimeout(1 * time.Second),
+		context.Background(),
+		again.WithTimeout(1*time.Second),
 	)
 	retrier.Registry.RegisterTemporaryError(http.ErrAbortHandler)
 
@@ -315,7 +300,8 @@ func TestRetryTimeout(t *testing.T) {
 func TestRetryWithContextCancel(t *testing.T) {
 	var retryCount int
 	retrier, _ := again.NewRetrier(
-		again.WithTimeout(10 * time.Second),
+		context.Background(),
+		again.WithTimeout(10*time.Second),
 	)
 	retrier.Registry.RegisterTemporaryError(http.ErrAbortHandler)
 
@@ -343,7 +329,8 @@ func TestRetryWithContextCancel(t *testing.T) {
 func TestRetryWithChannelCancel(t *testing.T) {
 	var retryCount int
 	retrier, _ := again.NewRetrier(
-		again.WithTimeout(10 * time.Second),
+		context.Background(),
+		again.WithTimeout(10*time.Second),
 	)
 	retrier.Registry.RegisterTemporaryError(http.ErrAbortHandler)
 
@@ -368,7 +355,7 @@ func TestRetryWithChannelCancel(t *testing.T) {
 }
 
 func BenchmarkRetry(b *testing.B) {
-	r, _ := again.NewRetrier()
+	r, _ := again.NewRetrier(context.Background())
 	tempErr := errors.New("temporary error")
 	r.Registry.RegisterTemporaryError(tempErr)
 

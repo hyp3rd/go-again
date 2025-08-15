@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"testing"
@@ -39,7 +40,7 @@ func TestRegistryIsTemporaryError(t *testing.T) {
 
 	defer r.UnRegisterTemporaryError(http.ErrAbortHandler)
 
-	retrier, _ := again.NewRetrier()
+	retrier, _ := again.NewRetrier(context.Background())
 	retrier.Registry = r
 
 	if retrier.Registry.IsTemporaryError(http.ErrAbortHandler, http.ErrAbortHandler) != true {

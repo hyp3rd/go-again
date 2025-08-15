@@ -20,6 +20,7 @@ func main() {
 	var retryCount int
 
 	retrier, err := again.NewRetrier(
+		context.Background(),
 		again.WithMaxRetries(maxRetires),
 		again.WithTimeout(retrierTimeout), // change this to 5*time.Second to see the difference
 	)

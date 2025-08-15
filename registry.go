@@ -59,6 +59,7 @@ func (r *Registry) UnRegisterTemporaryErrors(errs ...error) {
 		for i, e := range r.storage {
 			if errors.Is(e, target) {
 				r.storage = append(r.storage[:i], r.storage[i+1:]...)
+
 				break
 			}
 		}

@@ -6,9 +6,12 @@ dictionaries: []
 words:
   - benchmem
   - benchtime
+  - containedctx
+  - contextcheck
   - cyclop
   - daixiang
   - ewrap
+  - funlen
   - GITVERSION
   - goarch
   - GOFILES
@@ -19,6 +22,7 @@ words:
   - Newf
   - nolint
   - NOVENDOR
+  - randv
   - Retryable
   - staticcheck
   - venv

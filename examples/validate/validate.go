@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"time"
@@ -16,6 +17,7 @@ const (
 
 func main() {
 	_, err := again.NewRetrier(
+		context.Background(),
 		again.WithMaxRetries(maxRetries),
 		again.WithTimeout(time.Second), // change this to 5*time.Second to see the difference
 	)
@@ -26,6 +28,7 @@ func main() {
 	}
 
 	_, err = again.NewRetrier(
+		context.Background(),
 		again.WithMaxRetries(maxRetries),
 		again.WithJitter(jitter),
 		again.WithTimeout(timeout), // change this to 5*time.Second to see the difference
