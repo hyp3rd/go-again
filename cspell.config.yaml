@@ -5,10 +5,18 @@ dictionaryDefinitions: []
 dictionaries: []
 words:
   - cyclop
+  - daixiang
   - ewrap
+  - GITVERSION
+  - GOFILES
+  - gofumpt
   - gosec
+  - honnef
+  - mvdan
   - nolint
+  - NOVENDOR
   - Retryable
+  - staticcheck
   - venv
   - Wrapf
 ignoreWords: []
