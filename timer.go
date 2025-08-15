@@ -20,8 +20,11 @@ func NewTimerPool(size int, timeout time.Duration) *TimerPool {
 	// Create timers and put them into the pool.
 	for range size {
 		t := time.NewTimer(timeout)
-		t.Stop()         // Stop the timer.
-		t.Reset(timeout) // Reset the timer before adding it to the channel
+		t.Stop() // ensure the timer isn't running while in the pool
+		select {
+		case <-t.C:
+		default:
+		}
 		// Put the timer into the pool.
 		pool.ch <- t
 	}
@@ -31,15 +34,30 @@ func NewTimerPool(size int, timeout time.Duration) *TimerPool {
 
 // Get retrieves a timer from the pool.
 func (p *TimerPool) Get() *time.Timer {
-	// Get a timer from the pool.
-	return <-p.ch
+	// Get a timer from the pool and reset it to the configured duration.
+	t, ok := <-p.ch
+	if !ok || t == nil {
+		return nil
+	}
+	t.Reset(p.duration)
+
+	return t
 }
 
 // Put returns a timer back into the pool.
 func (p *TimerPool) Put(t *time.Timer) {
-	// Stop the timer.
-	t.Stop()
-	t.Reset(p.duration) // Reset the timer before returning it to the channel
+	// Stop the timer and drain its channel to avoid spurious wake-ups.
+	if !t.Stop() {
+		select {
+		case <-t.C:
+		default:
+		}
+	} else {
+		select {
+		case <-t.C:
+		default:
+		}
+	}
 
 	select {
 	case p.ch <- t:

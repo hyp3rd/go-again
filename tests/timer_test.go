@@ -19,11 +19,11 @@ func TestTimerPool(t *testing.T) {
 		t.Errorf("pool size is %d, expected %d", pool.Len(), poolSize)
 	}
 
-	// Get all of the timers from the pool and ensure that they are stopped.
+	// Get all of the timers from the pool and ensure that they are active.
 	for i := 0; i < poolSize; i++ {
 		timer := pool.Get()
-		if len(timer.C) == 0 && !timer.Stop() {
-			t.Error("timer was not stopped")
+		if !timer.Stop() {
+			t.Error("timer was not running")
 		}
 	}
 
@@ -89,7 +89,6 @@ func TestTimerPool_Reuse(t *testing.T) {
 
 	// Ensure that timers can be reused.
 	timer := pool.Get()
-	timer.Reset(timeout)
 	pool.Put(timer)
 
 	timer = pool.Get()

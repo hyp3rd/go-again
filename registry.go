@@ -5,166 +5,105 @@ import (
 	"errors"
 	"net"
 	"net/http"
-	"os"
 	"sync"
 )
 
-// TemporaryError implements the error interface.
-type TemporaryError error
-
-// Registry for temporary errors.
+// Registry holds a set of temporary errors.
 type Registry struct {
-	storage sync.Map // store for temporary errors
+	mu      sync.RWMutex
+	storage []error
 }
 
 // NewRegistry creates a new Registry.
 func NewRegistry() *Registry {
-	return &Registry{
-		storage: sync.Map{},
-	}
+	return &Registry{}
 }
 
-// LoadDefaults loads the default temporary errors into the registry.
+// LoadDefaults loads a set of default temporary errors.
 func (r *Registry) LoadDefaults() *Registry {
-	// Register default temporary errors.
-	defaults := map[string]func() TemporaryError{
-		"os.SyscallError": func() TemporaryError {
-			return &os.SyscallError{}
-		},
-		"context.DeadlineExceededError": func() TemporaryError {
-			return context.DeadlineExceeded
-		},
-		"http.ErrHandlerTimeout": func() TemporaryError {
-			return http.ErrHandlerTimeout
-		},
-		"http.ErrServerClosed": func() TemporaryError {
-			return http.ErrServerClosed
-		},
-		"net.ErrClosed": func() TemporaryError {
-			return net.ErrClosed
-		},
-		"net.ErrWriteToConnected": func() TemporaryError {
-			return net.ErrWriteToConnected
-		},
-	}
-
-	// Register default temporary errors.
-	r.RegisterTemporaryErrors(defaults)
+	r.RegisterTemporaryErrors(
+		context.DeadlineExceeded,
+		http.ErrHandlerTimeout,
+		http.ErrServerClosed,
+		net.ErrClosed,
+		net.ErrWriteToConnected,
+	)
 
 	return r
 }
 
-// RegisterTemporaryError registers a single temporary error.
-func (r *Registry) RegisterTemporaryError(name string, fn func() TemporaryError) {
-	r.RegisterTemporaryErrors(map[string]func() TemporaryError{name: fn})
+// RegisterTemporaryError registers a temporary error.
+func (r *Registry) RegisterTemporaryError(err error) {
+	r.RegisterTemporaryErrors(err)
 }
 
 // RegisterTemporaryErrors registers multiple temporary errors.
-func (r *Registry) RegisterTemporaryErrors(temporaryErrors map[string]func() TemporaryError) {
-	for name, fn := range temporaryErrors {
-		r.storage.Store(name, fn())
-	}
+func (r *Registry) RegisterTemporaryErrors(errs ...error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.storage = append(r.storage, errs...)
 }
 
-// UnRegisterTemporaryError unregisters one or more temporary errors by name.
-func (r *Registry) UnRegisterTemporaryError(names ...string) {
-	for _, name := range names {
-		r.storage.Delete(name)
-	}
+// UnRegisterTemporaryError removes a temporary error.
+func (r *Registry) UnRegisterTemporaryError(err error) {
+	r.UnRegisterTemporaryErrors(err)
 }
 
-// UnRegisterTemporaryErrors unregisters multiple temporary errors.
-func (r *Registry) UnRegisterTemporaryErrors(temporaryErrors map[string]func() TemporaryError) {
-	names := make([]string, 0, len(temporaryErrors))
-	for name := range temporaryErrors {
-		names = append(names, name)
-	}
+// UnRegisterTemporaryErrors removes multiple temporary errors.
+func (r *Registry) UnRegisterTemporaryErrors(errs ...error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-	r.UnRegisterTemporaryError(names...)
-}
-
-// GetTemporaryError returns a temporary error by name.
-func (r *Registry) GetTemporaryError(name string) (TemporaryError, bool) {
-	tempErr, ok := r.storage.Load(name)
-	if !ok {
-		return nil, false
-	}
-
-	err, ok := tempErr.(TemporaryError)
-	if !ok {
-		return nil, false
-	}
-
-	return err, true
-}
-
-// GetTemporaryErrors returns a list of temporary errors filtered by name.
-func (r *Registry) GetTemporaryErrors(names ...string) []TemporaryError {
-	errors := make([]TemporaryError, 0, len(names))
-
-	for _, name := range names {
-		tempErr, ok := r.storage.Load(name)
-		if !ok {
-			continue
+	for _, target := range errs {
+		for i, e := range r.storage {
+			if errors.Is(e, target) {
+				r.storage = append(r.storage[:i], r.storage[i+1:]...)
+				break
+			}
 		}
-
-		err, ok := tempErr.(TemporaryError)
-		if !ok {
-			continue
-		}
-
-		errors = append(errors, err)
 	}
-
-	return errors
 }
 
-// ListTemporaryErrors returns a list of temporary errors.
-func (r *Registry) ListTemporaryErrors() []TemporaryError {
-	errors := make([]TemporaryError, 0, r.Len())
+// ListTemporaryErrors returns all temporary errors in the registry.
+func (r *Registry) ListTemporaryErrors() []error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 
-	r.storage.Range(func(key, value any) bool {
-		err, ok := value.(TemporaryError)
-		if ok {
-			errors = append(errors, err)
-		}
+	out := make([]error, len(r.storage))
+	copy(out, r.storage)
 
-		return true
-	})
-
-	return errors
+	return out
 }
 
-// Len returns the number of temporary errors in the registry.
+// Len returns the number of registered temporary errors.
 func (r *Registry) Len() int {
-	count := 0
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 
-	r.storage.Range(func(_, _ any) bool {
-		count++
-
-		return true
-	})
-
-	return count
+	return len(r.storage)
 }
 
-// Clean cleans the Registry.
+// Clean removes all temporary errors from the registry.
 func (r *Registry) Clean() {
-	r.storage.Clear()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.storage = nil
 }
 
-// IsTemporaryError checks if the error is in the list of temporary errors.
-func (r *Registry) IsTemporaryError(err error, errorsList ...string) bool {
-	var tempErrors []TemporaryError
+// IsTemporaryError reports whether err matches any of the temporary errors.
+func (r *Registry) IsTemporaryError(err error, errs ...error) bool {
+	var tempErrors []error
 
-	if errorsList == nil {
+	if errs == nil {
 		tempErrors = r.ListTemporaryErrors()
 	} else {
-		tempErrors = r.GetTemporaryErrors(errorsList...)
+		tempErrors = errs
 	}
 
-	for _, tempErr := range tempErrors {
-		if errors.Is(tempErr, err) && err.Error() == tempErr.Error() {
+	for _, te := range tempErrors {
+		if errors.Is(err, te) {
 			return true
 		}
 	}

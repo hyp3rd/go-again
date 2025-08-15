@@ -29,11 +29,9 @@ func main() {
 		return
 	}
 
-	retrier.Registry.RegisterTemporaryError("http.ErrAbortHandler", func() again.TemporaryError {
-		return http.ErrAbortHandler
-	})
+	retrier.Registry.RegisterTemporaryError(http.ErrAbortHandler)
 
-	defer retrier.Registry.UnRegisterTemporaryError("http.ErrAbortHandler")
+	defer retrier.Registry.UnRegisterTemporaryError(http.ErrAbortHandler)
 
 	errs := retrier.Do(context.TODO(), func() error {
 		retryCount++
@@ -44,7 +42,7 @@ func main() {
 		}
 
 		return nil
-	}, "http.ErrAbortHandler")
+	}, http.ErrAbortHandler)
 
 	if errs.Last != nil {
 		fmt.Fprintf(os.Stderr, "retry returned an unexpected error: %v\n", errs.Last)

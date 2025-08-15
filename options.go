@@ -1,6 +1,9 @@
 package again
 
-import "time"
+import (
+	"log/slog"
+	"time"
+)
 
 // Option is a function type that can be used to configure the `Retrier` struct.
 type Option func(*Retrier)
@@ -44,5 +47,25 @@ func WithInterval(interval time.Duration) Option {
 func WithTimeout(timeout time.Duration) Option {
 	return func(retrier *Retrier) {
 		retrier.Timeout = timeout
+	}
+}
+
+// WithLogger sets a slog logger.
+func WithLogger(logger *slog.Logger) Option {
+	return func(retrier *Retrier) {
+		retrier.Logger = logger
+	}
+}
+
+// Hooks defines callback functions invoked by the retrier.
+type Hooks struct {
+	// OnRetry is called before waiting for the next retry interval.
+	OnRetry func(attempt int, err error)
+}
+
+// WithHooks sets hooks executed during retries.
+func WithHooks(h Hooks) Option {
+	return func(retrier *Retrier) {
+		retrier.Hooks = h
 	}
 }
