@@ -1,0 +1,15 @@
+---
+version: "0.2"
+ignorePaths: []
+dictionaryDefinitions: []
+dictionaries: []
+words:
+  - cyclop
+  - ewrap
+  - gosec
+  - nolint
+  - Retryable
+  - venv
+  - Wrapf
+ignoreWords: []
+import: []

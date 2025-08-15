@@ -50,6 +50,7 @@ func (r *Registry) LoadDefaults() *Registry {
 
 	// Register default temporary errors.
 	r.RegisterTemporaryErrors(defaults)
+
 	return r
 }
 
@@ -78,6 +79,7 @@ func (r *Registry) UnRegisterTemporaryErrors(temporaryErrors map[string]func() T
 	for name := range temporaryErrors {
 		names = append(names, name)
 	}
+
 	r.UnRegisterTemporaryError(names...)
 }
 
@@ -88,19 +90,30 @@ func (r *Registry) GetTemporaryError(name string) (TemporaryError, bool) {
 		return nil, false
 	}
 
-	return tempErr.(TemporaryError), ok
+	err, ok := tempErr.(TemporaryError)
+	if !ok {
+		return nil, false
+	}
+
+	return err, true
 }
 
 // GetTemporaryErrors returns a list of temporary errors filtered by name.
 func (r *Registry) GetTemporaryErrors(names ...string) []TemporaryError {
-	var errors []TemporaryError
+	errors := make([]TemporaryError, 0, len(names))
 
 	for _, name := range names {
 		tempErr, ok := r.storage.Load(name)
 		if !ok {
 			continue
 		}
-		errors = append(errors, tempErr.(TemporaryError))
+
+		err, ok := tempErr.(TemporaryError)
+		if !ok {
+			continue
+		}
+
+		errors = append(errors, err)
 	}
 
 	return errors
@@ -108,22 +121,36 @@ func (r *Registry) GetTemporaryErrors(names ...string) []TemporaryError {
 
 // ListTemporaryErrors returns a list of temporary errors.
 func (r *Registry) ListTemporaryErrors() []TemporaryError {
-	var errors []TemporaryError
+	errors := make([]TemporaryError, 0, r.Len())
 
-	r.storage.Range(func(key, value interface{}) bool {
-		errors = append(errors, value.(TemporaryError))
+	r.storage.Range(func(key, value any) bool {
+		err, ok := value.(TemporaryError)
+		if ok {
+			errors = append(errors, err)
+		}
+
 		return true
 	})
 
 	return errors
 }
 
-// Clean cleans the Registry.
-func (r *Registry) Clean() {
-	r.storage.Range(func(key, value interface{}) bool {
-		r.storage.Delete(key)
+// Len returns the number of temporary errors in the registry.
+func (r *Registry) Len() int {
+	count := 0
+
+	r.storage.Range(func(_, _ any) bool {
+		count++
+
 		return true
 	})
+
+	return count
+}
+
+// Clean cleans the Registry.
+func (r *Registry) Clean() {
+	r.storage.Clear()
 }
 
 // IsTemporaryError checks if the error is in the list of temporary errors.
@@ -141,5 +168,6 @@ func (r *Registry) IsTemporaryError(err error, errorsList ...string) bool {
 			return true
 		}
 	}
+
 	return false
 }

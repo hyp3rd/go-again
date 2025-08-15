@@ -18,13 +18,14 @@ func NewTimerPool(size int, timeout time.Duration) *TimerPool {
 		duration: timeout,
 	}
 	// Create timers and put them into the pool.
-	for i := 0; i < size; i++ {
+	for range size {
 		t := time.NewTimer(timeout)
 		t.Stop()         // Stop the timer.
 		t.Reset(timeout) // Reset the timer before adding it to the channel
 		// Put the timer into the pool.
 		pool.ch <- t
 	}
+
 	return pool
 }
 

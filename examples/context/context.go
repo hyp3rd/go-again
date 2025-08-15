@@ -3,38 +3,54 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/hyp3rd/go-again"
 )
 
+const (
+	timeout        = 5 * time.Second
+	retrierTimeout = 3 * time.Second
+	maxRetries     = 3
+	jitter         = 500 * time.Millisecond
+)
+
 func main() {
 	// Create a context with a timeout of 5 seconds. Adjust this to see the difference.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	// Create a retrier with a maximum of 3 retries, jitter of 0.5, and timeout of 3 second.
-	retrier, _ := again.NewRetrier(again.WithTimeout(3*time.Second),
-		again.WithJitter(500*time.Millisecond),
-		again.WithMaxRetries(3))
+	retrier, err := again.NewRetrier(again.WithTimeout(retrierTimeout),
+		again.WithJitter(jitter),
+		again.WithMaxRetries(maxRetries))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error creating retrier:", err)
+
+		return
+	}
 
 	// Define the function to retry.
 	fn := func() error {
-		fmt.Println("Trying...")
+		fmt.Fprintln(os.Stdout, "Trying...")
+
 		go func() {
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(jitter)
 			cancel()
 		}()
 		// Simulate a failure.
-		return fmt.Errorf("failed")
+		return again.ErrOperationFailed
 	}
 
 	// Retry the function.
 	errs := retrier.Do(ctx, fn)
 
 	if errs.Last != nil {
-		fmt.Println(errs)
-	} else {
-		fmt.Println("success")
+		fmt.Fprintln(os.Stderr, errs)
+
+		return
 	}
+
+	fmt.Fprintln(os.Stdout, "success")
 }
