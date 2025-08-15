@@ -57,8 +57,10 @@ type Retrier struct {
 	Timeout time.Duration
 	// Registry is the registry for temporary errors.
 	Registry *Registry
-	// once is used to ensure the registry is initialized only once.
-	once sync.Once
+	// registryOnce ensures the registry is initialized only once.
+	registryOnce sync.Once
+	// cancelOnce ensures the cancel channel is closed only once.
+	cancelOnce sync.Once
 	// mutex is the mutex used to synchronize access to the timer.
 	mutex sync.RWMutex
 	// timer is the timer pool.
@@ -139,7 +141,7 @@ func (r *Retrier) SetRegistry(reg *Registry) error {
 		return errors.New("registry cannot be nil")
 	}
 	// set the registry if not already set.
-	r.once.Do(func() {
+	r.registryOnce.Do(func() {
 		r.Registry = reg
 	})
 	return nil
@@ -224,11 +226,13 @@ func (r *Retrier) Do(ctx context.Context, retryableFunc RetryableFunc, temporary
 			errs.Last = ErrOperationStopped
 			return
 		case <-ctx.Done(): // Check if the context is cancelled.
+			r.timer.Put(timer)
 			errs.Last = ctx.Err()
 			return
 		case <-timer.C: // Wait for the retry interval.
 			r.timer.Put(timer)
 		case <-timeoutTimer.C: // Check if the timeout is reached.
+			r.timer.Put(timer)
 			errs.Last = fmt.Errorf("attempt %v: %w: %v", attempt, ErrTimeoutReached, r.err)
 			return
 		}
@@ -244,7 +248,7 @@ func (r *Retrier) Do(ctx context.Context, retryableFunc RetryableFunc, temporary
 
 // Cancel cancels the retries notifying the `Do` function to return.
 func (r *Retrier) Cancel() {
-	r.once.Do(func() {
+	r.cancelOnce.Do(func() {
 		close(r.cancel)
 	})
 }
