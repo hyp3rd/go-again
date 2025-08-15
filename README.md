@@ -32,12 +32,15 @@ The registry only allows you to retry a function if it returns a registered erro
     })
 
     defer retrier.Registry.UnRegisterTemporaryError("http.ErrAbortHandler")
+
     var retryCount int
+
     errs := retrier.Do(context.TODO(), func() error {
         retryCount++
         if retryCount < 3 {
             return http.ErrAbortHandler
         }
+
         return nil
     }, "http.ErrAbortHandler")
 
@@ -50,6 +53,7 @@ Should you retry regardless of the error returned, that's easy. It's enough call
 
 ```go
     var retryCount int
+
     retrier, err := again.NewRetrier(again.WithTimeout(1*time.Second),
         again.WithJitter(500*time.Millisecond),
         again.WithMaxRetries(3))
@@ -62,6 +66,7 @@ Should you retry regardless of the error returned, that's easy. It's enough call
         if retryCount < 3 {
             return http.ErrAbortHandler
         }
+
         return nil
     })
     if errs.Last != nil {
@@ -107,7 +112,7 @@ make run example=context
 
 ### Retrier
 
-```go  
+```go
 package main
 
 import (
@@ -138,7 +143,7 @@ func main() {
         return fmt.Errorf("temporary error")
     }, "temporary error")
     if errs.Last != nil {
-        fmt.Println(err)
+        // handle error
     }
 }
 ```

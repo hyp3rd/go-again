@@ -2,7 +2,6 @@ package again
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"math/rand"
 	"sync"
@@ -126,19 +125,19 @@ func NewRetrier(opts ...Option) (retrier *Retrier, err error) {
 //   - The total time consumed by all retries (`Interval` multiplied by `MaxRetries`) should be less than `Timeout`.
 func (r *Retrier) Validate() error {
 	if r.MaxRetries <= 0 {
-		return fmt.Errorf("%w: invalid max retries: %d, the value should be greater than zero", ErrInvalidRetrier, r.MaxRetries)
+		return ewrap.Wrapf(ErrInvalidRetrier, "invalid max retries: %d, the value should be greater than zero", r.MaxRetries)
 	}
 
 	if r.Interval >= r.Timeout {
-		return fmt.Errorf("%w: the interval %s should be less than timeout %s", ErrInvalidRetrier, r.Interval, r.Timeout)
+		return ewrap.Wrapf(ErrInvalidRetrier, "the interval %s should be less than timeout %s", r.Interval, r.Timeout)
 	}
 
 	if r.Interval*time.Duration(r.MaxRetries) >= r.Timeout {
-		return fmt.Errorf("%w: the interval %s multiplied by max retries %d should be less than timeout %s", ErrInvalidRetrier, r.Interval, r.MaxRetries, r.Timeout)
+		return ewrap.Wrapf(ErrInvalidRetrier, "the interval %s multiplied by max retries %d should be less than timeout %s", r.Interval, r.MaxRetries, r.Timeout)
 	}
 
 	if r.BackoffFactor <= 1 {
-		return fmt.Errorf("%w: invalid backoff factor: %f, the value should be greater than 1", ErrInvalidRetrier, r.BackoffFactor)
+		return ewrap.Wrapf(ErrInvalidRetrier, "invalid backoff factor: %f, the value should be greater than 1", r.BackoffFactor)
 	}
 
 	return nil

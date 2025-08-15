@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hyp3rd/ewrap"
+
 	"github.com/hyp3rd/go-again"
 )
 
@@ -95,7 +97,7 @@ func TestRetrier_Validate(t *testing.T) {
 		Timeout:       10 * time.Second,
 	}
 	err := r.Validate()
-	if err == nil || err.Error() != fmt.Sprintf("%v: invalid max retries: %d, the value should be greater than zero", again.ErrInvalidRetrier, r.MaxRetries) {
+	if err == nil || err.Error() != fmt.Sprintf("invalid max retries: %v, the value should be greater than zero: %v", r.MaxRetries, again.ErrInvalidRetrier) {
 		t.Errorf("expected error %q, but got %v", fmt.Sprintf("%v: invalid max retries: %d, the value should be greater than zero", again.ErrInvalidRetrier, r.MaxRetries), err)
 	}
 
@@ -108,7 +110,7 @@ func TestRetrier_Validate(t *testing.T) {
 		Timeout:       10 * time.Second,
 	}
 	err = r.Validate()
-	if err == nil || err.Error() != fmt.Sprintf("%v: invalid backoff factor: %f, the value should be greater than 1", again.ErrInvalidRetrier, r.BackoffFactor) {
+	if err == nil || err.Error() != fmt.Sprintf("invalid backoff factor: %f, the value should be greater than 1: %v", r.BackoffFactor, again.ErrInvalidRetrier) {
 		t.Errorf("expected error %q, but got %v", fmt.Sprintf("%v: invalid backoff factor: %f, the value should be greater than 1", again.ErrInvalidRetrier, r.BackoffFactor), err)
 	}
 
@@ -121,7 +123,7 @@ func TestRetrier_Validate(t *testing.T) {
 		Timeout:       1 * time.Second,
 	}
 	err = r.Validate()
-	if err == nil || err.Error() != fmt.Sprintf("%v: the interval %s should be less than timeout %s", again.ErrInvalidRetrier, r.Interval, r.Timeout) {
+	if err == nil || err.Error() != fmt.Sprintf("the interval %s should be less than timeout %s: %v", r.Interval, r.Timeout, again.ErrInvalidRetrier) {
 		t.Errorf("expected error %q, but got %v", fmt.Sprintf("%v: the interval %s should be less than timeout %s", again.ErrInvalidRetrier, r.Interval, r.Timeout), err)
 	}
 
@@ -134,7 +136,7 @@ func TestRetrier_Validate(t *testing.T) {
 		Timeout:       5 * time.Second,
 	}
 	err = r.Validate()
-	if err == nil || err.Error() != fmt.Sprintf("%v: the interval %s multiplied by max retries %d should be less than timeout %s", again.ErrInvalidRetrier, r.Interval, r.MaxRetries, r.Timeout) {
+	if err == nil || err.Error() != fmt.Sprintf("the interval %s multiplied by max retries %d should be less than timeout %s: %v", r.Interval, r.MaxRetries, r.Timeout, again.ErrInvalidRetrier) {
 		t.Errorf("expected error %q, but got %v", fmt.Sprintf("%v: the interval %s multiplied by max retries %d should be less than timeout %s", again.ErrInvalidRetrier, r.Interval, r.MaxRetries, r.Timeout), err)
 	}
 }
@@ -222,7 +224,8 @@ func TestStopRetries(t *testing.T) {
 		count++
 		time.Sleep(100 * time.Millisecond)
 		r.Cancel()
-		return fmt.Errorf("error")
+
+		return ewrap.New("error")
 	}
 
 	// Call the retry function.
