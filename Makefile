@@ -11,6 +11,9 @@ BUF_VERSION = v1.55.1
 test:
 	go test -v -timeout 5m -cover ./...
 
+bench:
+	cd tests && go test -bench=. -benchmem -benchtime=4s . -timeout 30m
+
 update-deps:
 	go get -v -u ./...
 	go mod tidy
@@ -79,6 +82,7 @@ help:
 	@echo
 	@echo "Testing commands:"
 	@echo "  test\t\t\t\tRun all tests in the project"
+	@echo "  bench\t\t\t\tRun benchmarks with 4 seconds of execution time"
 	@echo
 	@echo "Code quality commands:"
 	@echo "  lint\t\t\t\tRun all linters (gci, gofumpt, staticcheck, golangci-lint)"
@@ -87,4 +91,4 @@ help:
 	@echo
 	@echo "For more information, see the project README."
 
-.PHONY: prepare-toolchain test vet update-deps lint run-dev stop-dev run-gateway proto help
+.PHONY: prepare-toolchain test bench vet update-deps lint help

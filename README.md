@@ -89,12 +89,12 @@ A retrier certainly adds overhead to the execution of a function. `go-again` is 
 ```bash
 go test -bench=. -benchmem -benchtime=4s . -timeout 30m
 goos: darwin
-goarch: amd64
-pkg: github.com/hyp3rd/go-again
-cpu: Intel(R) Core(TM) i9-9880H CPU @ 2.30GHz
-BenchmarkRetry-16         490851          8926 ns/op        5376 B/op          1 allocs/op
+goarch: arm64
+pkg: github.com/hyp3rd/go-again/tests
+cpu: Apple M2 Pro
+BenchmarkRetry-12       337406      13686 ns/op     5378 B/op       1 allocs/op
 PASS
-ok      github.com/hyp3rd/go-again  40.390s
+ok   github.com/hyp3rd/go-again/tests 40.587s
 ```
 
 ## Installation

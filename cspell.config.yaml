@@ -4,10 +4,13 @@ ignorePaths: []
 dictionaryDefinitions: []
 dictionaries: []
 words:
+  - benchmem
+  - benchtime
   - cyclop
   - daixiang
   - ewrap
   - GITVERSION
+  - goarch
   - GOFILES
   - gofumpt
   - gosec
