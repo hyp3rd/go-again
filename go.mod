@@ -3,7 +3,7 @@ module github.com/hyp3rd/go-again
 go 1.25.0
 
 require (
-	github.com/hyp3rd/ewrap v1.2.0
+	github.com/hyp3rd/ewrap v1.3.0
 	github.com/stretchr/testify v1.10.0
 )
 

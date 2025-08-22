@@ -1,5 +1,5 @@
 ---
-version: 2
+version: "2"
 # Options for analysis running.
 run:
   # Number of operating system threads (`GOMAXPROCS`) that can execute golangci-lint simultaneously.
@@ -43,13 +43,6 @@ run:
   # Mainly related to generics support since go1.18.
   # Default: use Go version from the go.mod file, fallback on the env var `GOVERSION`, fallback on 1.17
   go: "1.25.0"
-
-exclusions:
-  # Which file paths to exclude: they will be analyzed, but issues from them won't be reported.
-  # "/" will be replaced by the current OS file path separator to properly work on Windows.
-  # Default: []
-  paths:
-    - "cmd/*/test-*"
 
 linters:
   # Enable specific linter
@@ -192,69 +185,12 @@ linters:
         - q *caches.Query[any]
         - T models.DataModel
 
-  # Enable only fast linters from enabled linters set (first run won't be fast)
-  # Default: false
-  fast: false
-
 formatters:
   enable:
-    # - gci
     - gofumpt
     - goimports
-    # - golines
-  # gci:
-  #   # Section configuration to compare against.
-  #   # Section names are case-insensitive and may contain parameters in ().
-  #   # The default order of sections is `standard > default > custom > blank > dot > alias > localmodule`,
-  #   # If `custom-order` is `true`, it follows the order of `sections` option.
-  #   # Default: ["standard", "default"]
-  #   sections:
-  #     - standard # Standard section: captures all standard packages.
-  #     - default # Default section: contains all imports that could not be matched to another section type.
-  #     - prefix(dev.azure.com/INGCDaaS/IngOne/_git/P31347-Core.git) # Custom section: groups all imports with the specified Prefix.
-  #   # Checks that no inline comments are present.
-  #   # Default: false
-  #   no-inline-comments: false
-  #   # Checks that no prefix comments (comment lines above an import) are present.
-  #   # Default: false
-  #   no-prefix-comments: false
-  #   # Enable custom order of sections.
-  #   # If `true`, make the section order the same as the order of `sections`.
-  #   # Default: false
-  #   custom-order: true
-  #   # Drops lexical ordering for custom sections.
-  #   # Default: false
-  #   no-lex-order: false
-
-  goimports:
-    # A comma-separated list of prefixes, which, if set, checks import paths
-    # with the given prefixes are grouped after 3rd-party packages.
-    # Default: ""
-    local-prefixes: dev.azure.com/INGCDaaS/IngOne/_git/P31347-Core.git
-
-  gofmt:
-  gofumpt:
-    # Module path which contains the source code being formatted.
-    # Default: ""
-    module-path: dev.azure.com/INGCDaaS/IngOne/_git/P31347-Core.git
-    # Choose whether to use the extra rules.
-    # Default: false
-    extra-rules: true
-
 # output configuration options
 output:
-  # Print lines of code with issue.
-  # Default: true
-  print-issued-lines: true
-  # Print linter name in the end of issue text.
-  # Default: true
-  print-linter-name: true
-  # Add a prefix to the output file references.
-  # Default: ""
-  path-prefix: ""
-  # Sort results by the order defined in `sort-order`.
-  # Default: false
-  sort-results: true
   # Order to use when sorting results.
   # Require `sort-results` to `true`.
   # Possible values: `file`, `linter`, and `severity`.
