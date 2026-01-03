@@ -272,7 +272,7 @@ func (r *Retrier) Do(ctx context.Context, retryableFunc RetryableFunc, temporary
 		backoffInterval := float64(r.Interval) * math.Pow(r.BackoffFactor, float64(attempt))
 		backoffDuration := time.Duration(backoffInterval)
 		//nolint:gosec // this has nothing to do with security.
-		jitterDuration := time.Duration(randv2.Int64N(int64(r.Jitter)))
+		jitterDuration := time.Duration(randv2.Int64N(int64(r.Jitter))) // #nosec G404
 		retryInterval := backoffDuration + jitterDuration
 
 		// Wait for the retry interval.

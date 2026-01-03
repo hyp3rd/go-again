@@ -3,7 +3,7 @@ include .project-settings.env
 GOLANGCI_LINT_VERSION ?= v2.7.2
 BUF_VERSION ?= v1.62.1
 GO_VERSION ?= 1.25.5
-GCI_PREFIX ?= github.com/hyp3rd/starter
+GCI_PREFIX ?= github.com/hyp3rd/go-again
 PROTO_ENABLED ?= true
 
 GOFILES = $(shell find . -type f -name '*.go' -not -path "./pkg/api/*" -not -path "./vendor/*" -not -path "./.gocache/*" -not -path "./.git/*")

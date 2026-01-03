@@ -97,6 +97,7 @@
     "nolint",
     "nonamedreturns",
     "nonroot",
+    "nosec",
     "popd",
     "Println",
     "protoc",
