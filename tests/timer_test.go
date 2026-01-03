@@ -20,7 +20,7 @@ func TestTimerPool(t *testing.T) {
 	}
 
 	// Get all of the timers from the pool and ensure that they are active.
-	for i := 0; i < poolSize; i++ {
+	for range poolSize {
 		timer := pool.Get()
 		if !timer.Stop() {
 			t.Error("timer was not running")
@@ -29,8 +29,10 @@ func TestTimerPool(t *testing.T) {
 
 	// Ensure that getting another timer from the pool blocks until a timer is returned.
 	doneCh := make(chan struct{})
+
 	go func() {
 		pool.Get()
+
 		doneCh <- struct{}{}
 	}()
 
@@ -54,7 +56,8 @@ func TestTimerPool(t *testing.T) {
 
 	// Ensure that the pool can be closed and that subsequent calls to Get() return nil.
 	pool.Close()
-	for i := 0; i < poolSize; i++ {
+
+	for range poolSize {
 		timer := pool.Get()
 		if timer != nil {
 			t.Error("timer is not nil, expected nil")
@@ -71,12 +74,15 @@ func TestTimerPool_PutClosed(t *testing.T) {
 
 	// Ensure that putting a timer into a closed pool panics.
 	timer := time.NewTimer(timeout)
+
 	pool.Close()
+
 	defer func() {
 		if r := recover(); r == nil {
 			t.Error("Put() did not panic, expected to panic")
 		}
 	}()
+
 	pool.Put(timer)
 }
 

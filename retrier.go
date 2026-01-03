@@ -30,7 +30,7 @@ var (
 	// ErrOperationStopped is the error returned when the retry is stopped.
 	ErrOperationStopped = ewrap.New("operation stopped")
 	// ErrNilRetryableFunc is the error returned when the retryable function is nil.
-	ErrNilRetryableFunc = ewrap.New("failed to invoke the function. It appears to be is nil")
+	ErrNilRetryableFunc = ewrap.New("failed to invoke the function. It appears to be nil")
 )
 
 // RetryableFunc signature of retryable function.
@@ -162,7 +162,13 @@ func (r *Retrier) Validate() error {
 	}
 
 	if r.Interval*time.Duration(r.MaxRetries) >= r.Timeout {
-		return ewrap.Wrapf(ErrInvalidRetrier, "the interval %s multiplied by max retries %d should be less than timeout %s", r.Interval, r.MaxRetries, r.Timeout)
+		return ewrap.Wrapf(
+			ErrInvalidRetrier,
+			"the interval %s multiplied by max retries %d should be less than timeout %s",
+			r.Interval,
+			r.MaxRetries,
+			r.Timeout,
+		)
 	}
 
 	if r.BackoffFactor <= 1 {
@@ -199,7 +205,7 @@ func (r *Retrier) SetRegistry(reg *Registry) error {
 //   - If the `temporaryErrors` list is empty, the function retries the function until the maximum number of retries is reached.
 //   - The context is used to cancel the retries, or set a deadline if the `retryableFunc` hangs.
 //
-//nolint:cyclop,funlen // 13 out of 12 is acceptable for this method.
+//nolint:cyclop,funlen ,revive// 13 out of 12 is acceptable for this method.
 func (r *Retrier) Do(ctx context.Context, retryableFunc RetryableFunc, temporaryErrors ...error) (errs *Errors) {
 	// lock the mutex to synchronize access to the timer.
 	r.mutex.RLock()
@@ -265,8 +271,8 @@ func (r *Retrier) Do(ctx context.Context, retryableFunc RetryableFunc, temporary
 		// Calculate the exponential backoff interval with jitter.
 		backoffInterval := float64(r.Interval) * math.Pow(r.BackoffFactor, float64(attempt))
 		backoffDuration := time.Duration(backoffInterval)
-		//nolint:gosec // this has nothing to do with security.
-		jitterDuration := time.Duration(randv2.Int64N(int64(r.Jitter)))
+
+		jitterDuration := time.Duration(randv2.Int64N(int64(r.Jitter))) // #nosec G404
 		retryInterval := backoffDuration + jitterDuration
 
 		// Wait for the retry interval.
