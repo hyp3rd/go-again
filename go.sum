@@ -1,7 +1,9 @@
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
-github.com/hyp3rd/ewrap v1.3.0 h1:hLCIMHsm+AoK2rMwVCYr5ljVHxj+tKTCP0pMMLiOW3Q=
-github.com/hyp3rd/ewrap v1.3.0/go.mod h1:IIFZD7fz7CjpWYW2bessFaLvUd3ip9E/ALlz0RE/Tpo=
+github.com/goccy/go-json v0.10.5 h1:Fq85nIqj+gXn/S5ahsiTlK3TmC85qgirsdTP/+DeaC4=
+github.com/goccy/go-json v0.10.5/go.mod h1:oq7eo15ShAhp70Anwd5lgX2pLfOS3QCiwU/PULtXL6M=
+github.com/hyp3rd/ewrap v1.3.5 h1:qXnWrmTQEt6zeSap5I/c047GSFlq3L8zIxiqdB1W7MU=
+github.com/hyp3rd/ewrap v1.3.5/go.mod h1:Nf6m8teevefjvr3ejK47ofL4F05cKpMMGxt3TFIC+B8=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/stretchr/objx v0.5.2 h1:xuMeJ0Sdp5ZMRXx/aWO6RZxdr3beISkG5/G/aIRr3pY=

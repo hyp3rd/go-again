@@ -23,18 +23,23 @@ func TestNewRetrier(t *testing.T) {
 	if r.MaxRetries != 5 {
 		t.Errorf("unexpected value for MaxRetries: got %d, want %d", r.MaxRetries, 5)
 	}
+
 	if r.Jitter != 1*time.Second {
 		t.Errorf("unexpected value for Jitter: got %v, want %v", r.Jitter, 1*time.Second)
 	}
+
 	if r.BackoffFactor != 2 {
 		t.Errorf("unexpected value for BackoffFactor: got %v, want %v", r.BackoffFactor, 2)
 	}
+
 	if r.Interval != 500*time.Millisecond {
 		t.Errorf("unexpected value for Interval: got %v, want %v", r.Interval, 500*time.Millisecond)
 	}
+
 	if r.Timeout != 20*time.Second {
 		t.Errorf("unexpected value for Timeout: got %v, want %v", r.Timeout, 20*time.Second)
 	}
+
 	if r.Registry == nil {
 		t.Errorf("unexpected value for Registry: got nil, want not nil")
 	}
@@ -51,18 +56,23 @@ func TestNewRetrier(t *testing.T) {
 	if err != nil {
 		t.Errorf("failed to create new Retrier: %v", err)
 	}
+
 	if r.MaxRetries != 10 {
 		t.Errorf("unexpected value for MaxRetries: got %d, want %d", r.MaxRetries, 10)
 	}
+
 	if r.Jitter != 2*time.Second {
 		t.Errorf("unexpected value for Jitter: got %v, want %v", r.Jitter, 2*time.Second)
 	}
+
 	if r.BackoffFactor != 3 {
 		t.Errorf("unexpected value for BackoffFactor: got %v, want %v", r.BackoffFactor, 3)
 	}
+
 	if r.Interval != 1*time.Second {
 		t.Errorf("unexpected value for Interval: got %v, want %v", r.Interval, 1*time.Second)
 	}
+
 	if r.Timeout != 30*time.Second {
 		t.Errorf("unexpected value for Timeout: got %v, want %v", r.Timeout, 30*time.Second)
 	}
@@ -97,6 +107,7 @@ func TestRetrier_Validate(t *testing.T) {
 		Interval:      1 * time.Second,
 		Timeout:       10 * time.Second,
 	}
+
 	err := r.Validate()
 	if err == nil || !errors.Is(err, again.ErrInvalidRetrier) || !strings.Contains(err.Error(), "invalid max retries") {
 		t.Errorf("expected invalid max retries error, got %v", err)
@@ -110,6 +121,7 @@ func TestRetrier_Validate(t *testing.T) {
 		Interval:      1 * time.Second,
 		Timeout:       10 * time.Second,
 	}
+
 	err = r.Validate()
 	if err == nil || !errors.Is(err, again.ErrInvalidRetrier) || !strings.Contains(err.Error(), "backoff factor") {
 		t.Errorf("expected invalid backoff factor error, got %v", err)
@@ -123,6 +135,7 @@ func TestRetrier_Validate(t *testing.T) {
 		Interval:      10 * time.Second,
 		Timeout:       1 * time.Second,
 	}
+
 	err = r.Validate()
 	if err == nil || !errors.Is(err, again.ErrInvalidRetrier) || !strings.Contains(err.Error(), "interval") {
 		t.Errorf("expected invalid interval error, got %v", err)
@@ -136,6 +149,7 @@ func TestRetrier_Validate(t *testing.T) {
 		Interval:      1 * time.Second,
 		Timeout:       5 * time.Second,
 	}
+
 	err = r.Validate()
 	if err == nil || !errors.Is(err, again.ErrInvalidRetrier) || !strings.Contains(err.Error(), "multiplied by max retries") {
 		t.Errorf("expected invalid interval*max retries error, got %v", err)
@@ -149,6 +163,7 @@ func TestDo(t *testing.T) {
 		return nil
 	}
 	r, _ := again.NewRetrier(context.Background())
+
 	errs := r.Do(context.Background(), retryableFunc)
 	if errs.Last != nil {
 		t.Errorf("unexpected error: %v", errs.Last)
@@ -158,6 +173,7 @@ func TestDo(t *testing.T) {
 	retryableFunc = func() error {
 		return errors.New("non-temporary error")
 	}
+
 	errs = r.Do(context.Background(), retryableFunc)
 	if errs.Last == nil || errs.Last.Error() != "non-temporary error" {
 		t.Errorf("expected error %q, but got %v", "non-temporary error", errs.Last)
@@ -165,12 +181,14 @@ func TestDo(t *testing.T) {
 
 	// Test temporary error.
 	r.SetRegistry(again.NewRegistry())
+
 	customError := errors.New("temporary error")
 	r.Registry.RegisterTemporaryError(customError)
 
 	retryableFunc = func() error {
 		return customError
 	}
+
 	errs = r.Do(context.Background(), retryableFunc, customError)
 	if errs.Last == nil || errs.Last.Error() != "temporary error" {
 		t.Errorf("unexpected error: %v", errs.Last)
@@ -205,8 +223,10 @@ func TestStopRetries(t *testing.T) {
 
 	// Retryable function that sleeps for 1 second and then returns an error.
 	var count int
+
 	retryableFunc := func() error {
 		count++
+
 		time.Sleep(100 * time.Millisecond)
 		r.Cancel()
 
@@ -215,10 +235,11 @@ func TestStopRetries(t *testing.T) {
 
 	// Call the retry function.
 	errs := r.Do(ctx, retryableFunc)
+
 	defer cancel()
 
 	// Check if the retry was stopped.
-	if errs.Last != again.ErrOperationStopped {
+	if !errors.Is(errs.Last, again.ErrOperationStopped) {
 		t.Errorf("expected error %q, but got %v", again.ErrOperationStopped, errs.Last)
 	}
 
@@ -231,6 +252,7 @@ func TestStopRetries(t *testing.T) {
 // TestWithoutRegistry tests the retry function without a registry.
 func TestWithoutRegistry(t *testing.T) {
 	var retryCount int
+
 	retrier, _ := again.NewRetrier(context.Background())
 
 	errs := retrier.Do(context.TODO(), func() error {
@@ -238,12 +260,14 @@ func TestWithoutRegistry(t *testing.T) {
 		if retryCount < 3 {
 			return http.ErrAbortHandler
 		}
+
 		return nil
 	})
 
 	if errs.Last != nil {
 		t.Errorf("retry returned an unexpected error: %v", errs.Last)
 	}
+
 	if retryCount != 3 {
 		t.Errorf("retry did not retry the function the expected number of times. Got: %d, Expecting: %d", retryCount, 1)
 	}
@@ -252,6 +276,7 @@ func TestWithoutRegistry(t *testing.T) {
 // TestRetryWithDefaults tests the retry function with the default registry.
 func TestRetryWithDefaults(t *testing.T) {
 	var retryCount int
+
 	retrier, _ := again.NewRetrier(context.Background())
 	retrier.Registry.LoadDefaults()
 
@@ -262,12 +287,14 @@ func TestRetryWithDefaults(t *testing.T) {
 		if retryCount < 3 {
 			return http.ErrHandlerTimeout
 		}
+
 		return nil
 	}, http.ErrHandlerTimeout)
 
 	if errs.Last != nil {
 		t.Errorf("retry returned an unexpected error: %v", errs.Last)
 	}
+
 	if retryCount != 3 {
 		t.Errorf("retry did not retry the function the expected number of times. Got: %d, Expecting: %d", retryCount, 3)
 	}
@@ -275,6 +302,7 @@ func TestRetryWithDefaults(t *testing.T) {
 
 func TestRetryTimeout(t *testing.T) {
 	var retryCount int
+
 	retrier, _ := again.NewRetrier(
 		context.Background(),
 		again.WithTimeout(1*time.Second),
@@ -287,8 +315,10 @@ func TestRetryTimeout(t *testing.T) {
 		retryCount++
 		if retryCount < 3 {
 			time.Sleep(2 * time.Second)
+
 			return http.ErrAbortHandler
 		}
+
 		return nil
 	}, http.ErrAbortHandler)
 
@@ -299,6 +329,7 @@ func TestRetryTimeout(t *testing.T) {
 
 func TestRetryWithContextCancel(t *testing.T) {
 	var retryCount int
+
 	retrier, _ := again.NewRetrier(
 		context.Background(),
 		again.WithTimeout(10*time.Second),
@@ -313,14 +344,17 @@ func TestRetryWithContextCancel(t *testing.T) {
 		if retryCount < 3 {
 			time.Sleep(2 * time.Second)
 			cancel()
+
 			return http.ErrAbortHandler
 		}
+
 		return nil
 	}, http.ErrAbortHandler)
 
 	if errs.Last == nil || !errors.Is(errs.Last, context.Canceled) {
 		t.Errorf("was expecting a %v error", context.Canceled)
 	}
+
 	if retryCount != 1 {
 		t.Errorf("retry did not retry the function the expected number of times. Got: %d, Expecting: %d", retryCount, 1)
 	}
@@ -328,6 +362,7 @@ func TestRetryWithContextCancel(t *testing.T) {
 
 func TestRetryWithChannelCancel(t *testing.T) {
 	var retryCount int
+
 	retrier, _ := again.NewRetrier(
 		context.Background(),
 		again.WithTimeout(10*time.Second),
@@ -341,14 +376,17 @@ func TestRetryWithChannelCancel(t *testing.T) {
 		if retryCount < 3 {
 			time.Sleep(2 * time.Second)
 			retrier.Cancel()
+
 			return http.ErrAbortHandler
 		}
+
 		return nil
 	}, http.ErrAbortHandler)
 
 	if errs.Last == nil || !errors.Is(errs.Last, again.ErrOperationStopped) {
 		t.Errorf("was expecting a %v error", again.ErrOperationStopped)
 	}
+
 	if retryCount != 1 {
 		t.Errorf("retry did not retry the function the expected number of times. Got: %d, Expecting: %d", retryCount, 1)
 	}
@@ -360,15 +398,17 @@ func BenchmarkRetry(b *testing.B) {
 	r.Registry.RegisterTemporaryError(tempErr)
 
 	var retryCount int
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		fn := func() error {
 			retryCount++
 			if retryCount < 5 {
 				return tempErr
 			}
+
 			return nil
 		}
+
 		b.StartTimer()
 		r.Do(context.TODO(), fn, tempErr)
 		b.StopTimer()
