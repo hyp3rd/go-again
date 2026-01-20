@@ -59,7 +59,7 @@ func (e *Errors) Join() error {
 //
 //nolint:containedctx
 type Retrier struct {
-	// MaxRetries is the maximum number of retries.
+	// MaxRetries is the maximum number of retries after the first attempt.
 	MaxRetries int
 	// Jitter is the amount of jitter to apply to the retry interval.
 	Jitter time.Duration
@@ -77,12 +77,12 @@ type Retrier struct {
 	cancelOnce sync.Once
 	// stopOnce ensures Stop is called only once.
 	stopOnce sync.Once
-	// mutex is the mutex used to synchronize access to the timer.
-	mutex sync.RWMutex
+	// initOnce ensures internal state is initialized once per Retrier instance.
+	initOnce sync.Once
+	// ctxOnce ensures the internal context is initialized once per Retrier instance.
+	ctxOnce sync.Once
 	// timer is the timer pool.
 	timer *TimerPool
-	// err is the error returned by the retry function.
-	err error
 	// errorsPool is a pool of Errors objects used to reduce memory allocations.
 	errorsPool sync.Pool
 	// ctx is used to cancel retries.
@@ -97,7 +97,7 @@ type Retrier struct {
 // NewRetrier returns a new Retrier configured with the given options.
 // If no options are provided, the default options are used.
 // The default options are:
-//   - MaxRetries: 5
+//   - MaxRetries: 5 (retries after the first attempt)
 //   - Jitter: 1 * time.Second
 //   - Interval: 500 * time.Millisecond
 //   - Timeout: 20 * time.Second
@@ -137,12 +137,12 @@ func NewRetrier(ctx context.Context, opts ...Option) (retrier *Retrier, err erro
 
 // Validate validates the Retrier.
 // This method will check if:
-//   - `MaxRetries` is less than or equal to zero
+//   - `MaxRetries` is less than zero
 //   - `Interval` is greater than or equal to `Timeout`
 //   - The total time consumed by all retries (`Interval` multiplied by `MaxRetries`) should be less than `Timeout`.
 func (r *Retrier) Validate() error {
-	if r.MaxRetries <= 0 {
-		return ewrap.Wrapf(ErrInvalidRetrier, "invalid max retries: %d, the value should be greater than zero", r.MaxRetries)
+	if r.MaxRetries < 0 {
+		return ewrap.Wrapf(ErrInvalidRetrier, "invalid max retries: %d, the value should be greater than or equal to zero", r.MaxRetries)
 	}
 
 	if r.Interval <= 0 {
@@ -202,15 +202,12 @@ func (r *Retrier) SetRegistry(reg *Registry) error {
 //   - If the `retryableFunc` returns a nil error, the function assigns an `Errors.Last` before returning.
 //   - If the `retryableFunc` returns a temporary error, the function retries the function.
 //   - If the `retryableFunc` returns a non-temporary error, the function assigns the error to `Errors.Last` and returns.
-//   - If the `temporaryErrors` list is empty, the function retries the function until the maximum number of retries is reached.
-//   - The context is used to cancel the retries, or set a deadline if the `retryableFunc` hangs.
+//   - If the `temporaryErrors` list is empty and the registry has entries, only those errors are retried.
+//   - If the `temporaryErrors` list is empty and the registry is empty, all errors are retried.
+//   - The context is checked between attempts; long-running functions should handle cancellation themselves.
 //
 //nolint:cyclop,funlen ,revive// 13 out of 12 is acceptable for this method.
 func (r *Retrier) Do(ctx context.Context, retryableFunc RetryableFunc, temporaryErrors ...error) (errs *Errors) {
-	// lock the mutex to synchronize access to the timer.
-	r.mutex.RLock()
-	defer r.mutex.RUnlock()
-
 	// get a new Errors object from the pool.
 	if obj, ok := r.errorsPool.Get().(*Errors); ok {
 		errs = obj
@@ -234,6 +231,8 @@ func (r *Retrier) Do(ctx context.Context, retryableFunc RetryableFunc, temporary
 		return errs
 	}
 
+	r.ensureInitialized()
+
 	// Start the timeout timer.
 	timeoutTimer := r.timer.Get()
 	defer r.timer.Put(timeoutTimer)
@@ -241,31 +240,45 @@ func (r *Retrier) Do(ctx context.Context, retryableFunc RetryableFunc, temporary
 	timeoutTimer.Reset(r.Timeout)
 
 	// Retry the function until it returns a nil error or the maximum number of retries is reached.
-	for attempt := range r.MaxRetries {
+	for attempt := 0; attempt <= r.MaxRetries; attempt++ {
 		// Call the function to retry.
-		r.err = retryableFunc()
+		err := retryableFunc()
 
 		// If the function returns a nil error, return nil.
-		if r.err == nil {
+		if err == nil {
 			errs.Last = nil
 
 			return errs
 		}
 
 		// Record the error.
-		errs.Attempts = append(errs.Attempts, r.err)
+		errs.Attempts = append(errs.Attempts, err)
 
-		// Check if the error is temporary when the list is not empty.
-		if len(temporaryErrors) > 0 && !r.Registry.IsTemporaryError(r.err, temporaryErrors...) {
+		// Check if the error is temporary.
+		if len(temporaryErrors) == 0 {
+			if r.Registry.Len() > 0 && !r.Registry.IsTemporaryError(err) {
+				errs.Last = err
+
+				return errs
+			}
+		} else if !r.Registry.IsTemporaryError(err, temporaryErrors...) {
+			errs.Last = err
+
+			return errs
+		}
+
+		if attempt == r.MaxRetries {
+			errs.Last = err
+
 			break
 		}
 
 		if r.Hooks.OnRetry != nil {
-			r.Hooks.OnRetry(attempt, r.err)
+			r.Hooks.OnRetry(attempt, err)
 		}
 
 		if r.Logger != nil {
-			r.Logger.Log(ctx, slog.LevelDebug, "retry", slog.Int("attempt", attempt), slog.Any("error", r.err))
+			r.Logger.Log(ctx, slog.LevelDebug, "retry", slog.Int("attempt", attempt), slog.Any("error", err))
 		}
 
 		// Calculate the exponential backoff interval with jitter.
@@ -294,20 +307,21 @@ func (r *Retrier) Do(ctx context.Context, retryableFunc RetryableFunc, temporary
 			return errs
 		case <-timeoutTimer.C:
 			r.timer.Put(timer)
-			errs.Last = ewrap.Wrapf(r.err, "attempt %v: %v", attempt, ErrTimeoutReached)
+
+			errs.Last = ewrap.Wrapf(ErrTimeoutReached, "attempt %v: %v", attempt, err)
 
 			return errs
 		case <-timer.C:
 			r.timer.Put(timer)
 		}
+
+		errs.Last = err
 	}
 
 	// If the maximum number of retries is reached register the last attempt error.
-	errs.Attempts = append(errs.Attempts, ewrap.Wrapf(r.err, "%v", ErrMaxRetriesReached))
+	errs.Attempts = append(errs.Attempts, ewrap.Wrapf(errs.Last, "%v", ErrMaxRetriesReached))
 
 	// Register the last error returned by the function as the last error and return.
-	errs.Last = r.err
-
 	return errs
 }
 
@@ -328,6 +342,8 @@ func DoWithResult[T any](ctx context.Context, r *Retrier, fn func() (T, error), 
 
 // Cancel cancels the retries notifying the `Do` function to return.
 func (r *Retrier) Cancel() {
+	r.ensureContext()
+
 	r.cancelOnce.Do(func() {
 		r.cancelFunc(ErrOperationStopped)
 	})
@@ -335,6 +351,8 @@ func (r *Retrier) Cancel() {
 
 // Stop stops the retries.
 func (r *Retrier) Stop() {
+	r.ensureContext()
+
 	r.stopOnce.Do(func() {
 		r.cancelFunc(ErrOperationStopped)
 	})
@@ -344,4 +362,36 @@ func (r *Retrier) Stop() {
 func (r *Retrier) PutErrors(errs *Errors) {
 	errs.Reset()
 	r.errorsPool.Put(errs)
+}
+
+func (r *Retrier) ensureContext() {
+	r.ctxOnce.Do(func() {
+		if r.ctx == nil || r.cancelFunc == nil {
+			r.ctx, r.cancelFunc = context.WithCancelCause(context.Background())
+		}
+	})
+}
+
+func (r *Retrier) ensureInitialized() {
+	r.initOnce.Do(func() {
+		if r.Registry == nil {
+			r.Registry = NewRegistry()
+		}
+
+		if r.Logger == nil {
+			r.Logger = slog.Default()
+		}
+
+		if r.errorsPool.New == nil {
+			r.errorsPool.New = func() any {
+				return &Errors{Attempts: make([]error, 0, r.MaxRetries+1)}
+			}
+		}
+
+		if r.timer == nil {
+			r.timer = NewTimerPool(r.MaxRetries+1, r.Timeout)
+		}
+
+		r.ensureContext()
+	})
 }

@@ -15,7 +15,7 @@ func applyOptions(retrier *Retrier, options ...Option) {
 	}
 }
 
-// WithMaxRetries returns an option that sets the maximum number of retries.
+// WithMaxRetries returns an option that sets the maximum number of retries after the first attempt.
 func WithMaxRetries(num int) Option {
 	return func(retrier *Retrier) {
 		retrier.MaxRetries = num
