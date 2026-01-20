@@ -647,18 +647,51 @@ func BenchmarkRetry(b *testing.B) {
 
 	var retryCount int
 
-	for b.Loop() {
-		fn := func() error {
-			retryCount++
-			if retryCount < 5 {
-				return tempErr
-			}
-
-			return nil
+	fn := func() error {
+		retryCount++
+		if retryCount < 5 {
+			return tempErr
 		}
 
-		b.StartTimer()
+		return nil
+	}
+
+	retryCount = 5
+
+	for b.Loop() {
 		retrier.Do(context.TODO(), fn, tempErr)
-		b.StopTimer()
+	}
+}
+
+func BenchmarkRetryWithRetries(b *testing.B) {
+	retrier, err := again.NewRetrier(
+		context.Background(),
+		again.WithMaxRetries(5),
+		again.WithInterval(1*time.Microsecond),
+		again.WithJitter(1*time.Microsecond),
+		again.WithTimeout(50*time.Millisecond),
+	)
+	if err != nil {
+		b.Fatalf(errFailedToCreateRetrier, err)
+	}
+
+	tempErr := errTemporary
+	retrier.Registry.RegisterTemporaryError(tempErr)
+
+	var retryCount int
+
+	fn := func() error {
+		retryCount++
+		if retryCount < 5 {
+			return tempErr
+		}
+
+		return nil
+	}
+
+	for b.Loop() {
+		retryCount = 0
+
+		retrier.Do(context.TODO(), fn, tempErr)
 	}
 }
