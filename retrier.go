@@ -59,7 +59,7 @@ func (e *Errors) Join() error {
 //
 //nolint:containedctx
 type Retrier struct {
-	// MaxRetries is the maximum number of retries.
+	// MaxRetries is the maximum number of retries after the first attempt.
 	MaxRetries int
 	// Jitter is the amount of jitter to apply to the retry interval.
 	Jitter time.Duration
@@ -97,7 +97,7 @@ type Retrier struct {
 // NewRetrier returns a new Retrier configured with the given options.
 // If no options are provided, the default options are used.
 // The default options are:
-//   - MaxRetries: 5
+//   - MaxRetries: 5 (retries after the first attempt)
 //   - Jitter: 1 * time.Second
 //   - Interval: 500 * time.Millisecond
 //   - Timeout: 20 * time.Second
@@ -137,12 +137,12 @@ func NewRetrier(ctx context.Context, opts ...Option) (retrier *Retrier, err erro
 
 // Validate validates the Retrier.
 // This method will check if:
-//   - `MaxRetries` is less than or equal to zero
+//   - `MaxRetries` is less than zero
 //   - `Interval` is greater than or equal to `Timeout`
 //   - The total time consumed by all retries (`Interval` multiplied by `MaxRetries`) should be less than `Timeout`.
 func (r *Retrier) Validate() error {
-	if r.MaxRetries <= 0 {
-		return ewrap.Wrapf(ErrInvalidRetrier, "invalid max retries: %d, the value should be greater than zero", r.MaxRetries)
+	if r.MaxRetries < 0 {
+		return ewrap.Wrapf(ErrInvalidRetrier, "invalid max retries: %d, the value should be greater than or equal to zero", r.MaxRetries)
 	}
 
 	if r.Interval <= 0 {
@@ -202,7 +202,8 @@ func (r *Retrier) SetRegistry(reg *Registry) error {
 //   - If the `retryableFunc` returns a nil error, the function assigns an `Errors.Last` before returning.
 //   - If the `retryableFunc` returns a temporary error, the function retries the function.
 //   - If the `retryableFunc` returns a non-temporary error, the function assigns the error to `Errors.Last` and returns.
-//   - If the `temporaryErrors` list is empty, the function retries the function until the maximum number of retries is reached.
+//   - If the `temporaryErrors` list is empty and the registry has entries, only those errors are retried.
+//   - If the `temporaryErrors` list is empty and the registry is empty, all errors are retried.
 //   - The context is checked between attempts; long-running functions should handle cancellation themselves.
 //
 //nolint:cyclop,funlen ,revive// 13 out of 12 is acceptable for this method.
@@ -239,7 +240,7 @@ func (r *Retrier) Do(ctx context.Context, retryableFunc RetryableFunc, temporary
 	timeoutTimer.Reset(r.Timeout)
 
 	// Retry the function until it returns a nil error or the maximum number of retries is reached.
-	for attempt := range r.MaxRetries {
+	for attempt := 0; attempt <= r.MaxRetries; attempt++ {
 		// Call the function to retry.
 		err := retryableFunc()
 
@@ -253,11 +254,23 @@ func (r *Retrier) Do(ctx context.Context, retryableFunc RetryableFunc, temporary
 		// Record the error.
 		errs.Attempts = append(errs.Attempts, err)
 
-		// Check if the error is temporary when the list is not empty.
-		if len(temporaryErrors) > 0 && !r.Registry.IsTemporaryError(err, temporaryErrors...) {
+		// Check if the error is temporary.
+		if len(temporaryErrors) == 0 {
+			if r.Registry.Len() > 0 && !r.Registry.IsTemporaryError(err) {
+				errs.Last = err
+
+				return errs
+			}
+		} else if !r.Registry.IsTemporaryError(err, temporaryErrors...) {
 			errs.Last = err
 
 			return errs
+		}
+
+		if attempt == r.MaxRetries {
+			errs.Last = err
+
+			break
 		}
 
 		if r.Hooks.OnRetry != nil {

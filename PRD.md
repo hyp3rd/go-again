@@ -14,7 +14,6 @@
 
 ## Non-Goals
 
-- Change retry semantics when `temporaryErrors` are omitted.
 - Redesign backoff or introduce new retry strategies.
 - Add new public APIs beyond documentation updates.
 
@@ -42,6 +41,8 @@
 - Non-temporary errors return immediately when a temporary list is provided.
 - `Do` initializes missing internals (timer pool, registry, context, pool) safely.
 - Timeout path wraps `ErrTimeoutReached` as the cause.
+- When `temporaryErrors` is empty, use the registry if it has entries; if the registry is empty, retry all errors.
+- `MaxRetries` counts retries after the first attempt (total attempts = `MaxRetries + 1`).
 - README reflects actual `Errors` fields and registry usage.
 
 ### Non-Functional
@@ -55,19 +56,46 @@
 - Add internal initialization to avoid nil timer/context/registry/pool.
 - Wrap timeouts with `ErrTimeoutReached` and include attempt + last error in message.
 - Return early on non-temporary errors when a list is provided.
+- Default to registry-based filtering when `temporaryErrors` is omitted (fallback to retry-all if registry is empty).
+- Update `MaxRetries` semantics to mean retries after the first attempt and document it.
 - Update README snippets and API notes to match current code.
+
+## Acceptance Criteria
+
+- `Do` is safe for concurrent calls (race-free under `go test -race`).
+- Non-temporary errors stop retries when a list is provided (no max-retries marker).
+- Manually constructed `Retrier` does not panic in `Do`.
+- Timeout errors satisfy `errors.Is(err, ErrTimeoutReached)`.
+- Registry defaults are applied when no temporary list is provided (while retry-all still works when the registry is empty).
+- `MaxRetries` yields `MaxRetries + 1` total attempts.
+- README examples compile against the current API.
 
 ## Test Plan
 
 - Add a test verifying non-temporary error returns early (no max-retries marker).
 - Add a test ensuring manually constructed `Retrier` does not panic in `Do`.
 - Assert `errors.Is(err, ErrTimeoutReached)` is true on timeouts.
+- Add a test verifying registry defaults are used when the temporary list is empty.
+- Add a test verifying `MaxRetries` yields `MaxRetries + 1` total attempts.
 - Run `go test ./...`.
+
+## Risks
+
+- Consumers matching error strings may need updates due to wrapping changes.
+- Retrier validation rules can cause tests to fail if timeout/interval/max-retry combinations are invalid.
+- Services relying on retry-all behavior may need to keep the registry empty when omitting the temporary list.
+
+## Decisions
+
+- `temporaryErrors` defaults to the registry when omitted; retry-all behavior remains when the registry is empty.
+- `MaxRetries` counts retries after the first attempt.
+- Long-running calls should be differentiated by documenting/encouraging context-aware retryable functions.
+
+## Dependencies
+
+- Go toolchain (module `go.mod`), `github.com/hyp3rd/ewrap`.
 
 ## Rollout
 
-arly on non-temporary errors when a list is provided.
-
-arly on non-temporary errors when a list is provided.
-
-- Update README snippets and API notes to match current code.
+- Cut a patch release after tests pass.
+- Add brief release notes covering retry correctness and documentation fixes.

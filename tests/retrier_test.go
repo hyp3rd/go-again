@@ -99,6 +99,18 @@ func TestRetrier_Validate(t *testing.T) {
 		t.Errorf("failed to validate Retrier: %v", err)
 	}
 
+	// Test zero MaxRetries is valid.
+	r = &again.Retrier{
+		MaxRetries:    0,
+		Jitter:        1 * time.Second,
+		BackoffFactor: 2,
+		Interval:      500 * time.Millisecond,
+		Timeout:       20 * time.Second,
+	}
+	if err := r.Validate(); err != nil {
+		t.Errorf("failed to validate Retrier with zero MaxRetries: %v", err)
+	}
+
 	// Test invalid MaxRetries.
 	r = &again.Retrier{
 		MaxRetries:    -1,
@@ -217,6 +229,7 @@ func TestDo_NonTemporaryStopsEarly(t *testing.T) {
 	}
 
 	var attempts int
+
 	nonTempErr := errors.New("non-temporary error")
 	tempErr := errors.New("temporary error")
 
@@ -240,6 +253,36 @@ func TestDo_NonTemporaryStopsEarly(t *testing.T) {
 
 	if strings.Contains(errs.Attempts[0].Error(), again.ErrMaxRetriesReached.Error()) {
 		t.Errorf("did not expect max retries error to be recorded")
+	}
+}
+
+func TestDo_MaxRetriesCountsRetries(t *testing.T) {
+	r, err := again.NewRetrier(
+		context.Background(),
+		again.WithMaxRetries(0),
+		again.WithInterval(10*time.Millisecond),
+		again.WithTimeout(1*time.Second),
+	)
+	if err != nil {
+		t.Fatalf("failed to create retrier: %v", err)
+	}
+
+	var attempts int
+
+	tempErr := errors.New("temporary error")
+
+	errs := r.Do(context.Background(), func() error {
+		attempts++
+
+		return tempErr
+	}, tempErr)
+
+	if attempts != 1 {
+		t.Errorf("expected 1 attempt, got %d", attempts)
+	}
+
+	if !errors.Is(errs.Last, tempErr) {
+		t.Errorf("expected last error to match %v, got %v", tempErr, errs.Last)
 	}
 }
 
@@ -333,6 +376,32 @@ func TestRetryWithDefaults(t *testing.T) {
 	}
 }
 
+func TestRetryWithDefaultsWithoutList(t *testing.T) {
+	var retryCount int
+
+	retrier, _ := again.NewRetrier(context.Background())
+	retrier.Registry.LoadDefaults()
+
+	defer retrier.Registry.Clean()
+
+	errs := retrier.Do(context.TODO(), func() error {
+		retryCount++
+		if retryCount < 3 {
+			return http.ErrHandlerTimeout
+		}
+
+		return nil
+	})
+
+	if errs.Last != nil {
+		t.Errorf("retry returned an unexpected error: %v", errs.Last)
+	}
+
+	if retryCount != 3 {
+		t.Errorf("retry did not retry the function the expected number of times. Got: %d, Expecting: %d", retryCount, 3)
+	}
+}
+
 func TestRetryTimeout(t *testing.T) {
 	var retryCount int
 
@@ -345,6 +414,7 @@ func TestRetryTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create retrier: %v", err)
 	}
+
 	retrier.Registry.RegisterTemporaryError(http.ErrAbortHandler)
 
 	defer retrier.Registry.UnRegisterTemporaryError(http.ErrAbortHandler)

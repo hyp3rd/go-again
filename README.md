@@ -3,9 +3,9 @@
 [![Go](https://github.com/hyp3rd/go-again/actions/workflows/go.yml/badge.svg)][build-link] [![CodeQL](https://github.com/hyp3rd/go-again/actions/workflows/codeql.yml/badge.svg)][codeql-link]
 
 `go-again` **thread safely** wraps a given function and executes it until it returns a nil error or exceeds the maximum number of retries.
-The configuration consists of the maximum number of retries, the interval, a jitter to add a randomized backoff, the timeout, and a registry to store errors that you consider temporary, hence worth a retry.
+The configuration consists of the maximum number of retries (after the first attempt), the interval, a jitter to add a randomized backoff, the timeout, and a registry to store errors that you consider temporary, hence worth a retry.
 
-The `Do` method takes a context, a function, and an optional list of `temporary errors` as arguments. It supports cancellation from the context and a channel invoking the `Cancel()` function.
+The `Do` method takes a context, a function, and an optional list of `temporary errors` as arguments. If the list is omitted and the registry has entries, the registry is used as the default filter; if the registry is empty, all errors are retried. It supports cancellation from the context and a channel invoking the `Cancel()` function; long-running operations should observe the context inside the retryable function.
 The returned type is `Errors` which contains the list of errors returned at each attempt and the last error returned by the function.
 
 ```golang
@@ -18,7 +18,7 @@ type Errors struct {
 }
 ```
 
-When you pass a list of temporary errors to `Do`, retries only happen when the error matches that list. The registry is a convenience store for temporary errors you want to pass to `Do`:
+When you pass a list of temporary errors to `Do`, retries only happen when the error matches that list. The registry is a convenience store for temporary errors you want to pass to `Do`, or to use as the default filter when the list is omitted:
 
 ```go
     // Init with defaults.
@@ -47,7 +47,7 @@ When you pass a list of temporary errors to `Do`, retries only happen when the e
     }
 ```
 
-Should you retry regardless of the error returned, call `Do` without passing any temporary errors:
+Should you retry regardless of the error returned, call `Do` without passing any temporary errors and keep the registry empty:
 
 ```go
     var retryCount int
