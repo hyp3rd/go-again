@@ -11,14 +11,14 @@ The returned type is `Errors` which contains the list of errors returned at each
 ```golang
 // Errors holds the error returned by the retry function along with the trace of each attempt.
 type Errors struct {
-    // Retries hold the trace of each attempt.
-    Retries map[int]error
+    // Attempts holds the trace of each attempt in order.
+    Attempts []error
     // Last holds the last error returned by the retry function.
     Last error
 }
 ```
 
-The registry only allows you to retry a function if it returns a registered error:
+When you pass a list of temporary errors to `Do`, retries only happen when the error matches that list. The registry is a convenience store for temporary errors you want to pass to `Do`:
 
 ```go
     // Init with defaults.
@@ -27,9 +27,7 @@ The registry only allows you to retry a function if it returns a registered erro
         // handle error
     }
 
-    retrier.Registry.RegisterTemporaryError(http.ErrAbortHandler, func() TemporaryError {
-        return http.ErrAbortHandler
-    })
+    retrier.Registry.RegisterTemporaryError(http.ErrAbortHandler)
 
     defer retrier.Registry.UnRegisterTemporaryError(http.ErrAbortHandler)
 
@@ -49,7 +47,7 @@ The registry only allows you to retry a function if it returns a registered erro
     }
 ```
 
-Should you retry regardless of the error returned, that's easy. It's enough calling the Do function without passing a plausible set of registered error names:
+Should you retry regardless of the error returned, call `Do` without passing any temporary errors:
 
 ```go
     var retryCount int
@@ -117,6 +115,8 @@ make run example=context
 package main
 
 import (
+    "context"
+    "errors"
     "fmt"
     "time"
 
@@ -134,15 +134,14 @@ func main() {
     }
 
     // Register a temporary error.
-    retrier.Registry.RegisterTemporaryError("temporary error", func() again.TemporaryError {
-        return fmt.Errorf("temporary error")
-    })
+    tempErr := errors.New("temporary error")
+    retrier.Registry.RegisterTemporaryError(tempErr)
 
     // Retry a function.
     errs := retrier.Do(context.TODO(), func() error {
         // Do something here.
-        return fmt.Errorf("temporary error")
-    }, "temporary error")
+        return tempErr
+    }, tempErr)
     if errs.Last != nil {
         // handle error
     }

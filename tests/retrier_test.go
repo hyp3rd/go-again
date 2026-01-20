@@ -210,6 +210,39 @@ func TestDo(t *testing.T) {
 	}
 }
 
+func TestDo_NonTemporaryStopsEarly(t *testing.T) {
+	r, err := again.NewRetrier(context.Background())
+	if err != nil {
+		t.Fatalf("failed to create retrier: %v", err)
+	}
+
+	var attempts int
+	nonTempErr := errors.New("non-temporary error")
+	tempErr := errors.New("temporary error")
+
+	errs := r.Do(context.Background(), func() error {
+		attempts++
+
+		return nonTempErr
+	}, tempErr)
+
+	if attempts != 1 {
+		t.Errorf("expected 1 attempt, got %d", attempts)
+	}
+
+	if !errors.Is(errs.Last, nonTempErr) {
+		t.Errorf("expected last error to be %v, got %v", nonTempErr, errs.Last)
+	}
+
+	if len(errs.Attempts) != 1 {
+		t.Errorf("expected 1 attempt error, got %d", len(errs.Attempts))
+	}
+
+	if strings.Contains(errs.Attempts[0].Error(), again.ErrMaxRetriesReached.Error()) {
+		t.Errorf("did not expect max retries error to be recorded")
+	}
+}
+
 // Test stop retries.
 func TestStopRetries(t *testing.T) {
 	// Create a new Retrier with a small interval to speed up the test.
@@ -303,10 +336,15 @@ func TestRetryWithDefaults(t *testing.T) {
 func TestRetryTimeout(t *testing.T) {
 	var retryCount int
 
-	retrier, _ := again.NewRetrier(
+	retrier, err := again.NewRetrier(
 		context.Background(),
 		again.WithTimeout(1*time.Second),
+		again.WithInterval(100*time.Millisecond),
+		again.WithMaxRetries(3),
 	)
+	if err != nil {
+		t.Fatalf("failed to create retrier: %v", err)
+	}
 	retrier.Registry.RegisterTemporaryError(http.ErrAbortHandler)
 
 	defer retrier.Registry.UnRegisterTemporaryError(http.ErrAbortHandler)
@@ -324,6 +362,37 @@ func TestRetryTimeout(t *testing.T) {
 
 	if errs.Last == nil {
 		t.Errorf("was expecting a timeout error")
+	}
+
+	if !errors.Is(errs.Last, again.ErrTimeoutReached) {
+		t.Errorf("expected error to match %v, got %v", again.ErrTimeoutReached, errs.Last)
+	}
+}
+
+func TestDo_ManualRetrierInitialization(t *testing.T) {
+	r := &again.Retrier{
+		MaxRetries:    2,
+		Jitter:        1 * time.Millisecond,
+		BackoffFactor: 2,
+		Interval:      1 * time.Millisecond,
+		Timeout:       10 * time.Millisecond,
+	}
+
+	tempErr := errors.New("temporary error")
+	errs := r.Do(context.Background(), func() error {
+		return again.ErrOperationFailed
+	}, tempErr)
+
+	if errs.Last == nil {
+		t.Fatalf("expected last error, got nil")
+	}
+
+	if !errors.Is(errs.Last, again.ErrOperationFailed) {
+		t.Errorf("expected last error to match %v, got %v", again.ErrOperationFailed, errs.Last)
+	}
+
+	if r.Registry == nil {
+		t.Errorf("expected registry to be initialized")
 	}
 }
 
