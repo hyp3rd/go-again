@@ -1,9 +1,9 @@
 module github.com/hyp3rd/go-again
 
-go 1.25.5
+go 1.25.6
 
 require (
-	github.com/hyp3rd/ewrap v1.3.5
+	github.com/hyp3rd/ewrap v1.3.7
 	github.com/stretchr/testify v1.10.0
 )
 

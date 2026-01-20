@@ -72,7 +72,7 @@ func (p *TimerPool) Close() {
 
 // Drain drains the pool.
 //
-//nolint:revive
+
 func (p *TimerPool) Drain() {
 	// Drain the channel.
 	for range p.ch {
