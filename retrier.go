@@ -294,7 +294,38 @@ func (r *Retrier) Do(ctx context.Context, retryableFunc RetryableFunc, temporary
 	return errs
 }
 
-// DoWithContext retries a context-aware function that should observe cancellation.
+// DoWithContext retries a context-aware function until it succeeds, a terminal error is
+// encountered, the provided context is canceled, the retrier timeout elapses, or the
+// maximum number of retries is reached. It is the context-aware counterpart of Do.
+//
+// The behavior of DoWithContext mirrors Do:
+//   - The retryableFunc is invoked at most MaxRetries+1 times (the initial attempt plus
+//     up to MaxRetries retries) until it returns a nil error.
+//   - Any error returned by retryableFunc that matches one of the temporaryErrors is
+//     treated as transient. That error is appended to errs.Attempts and the call is
+//     retried according to the configured backoff, jitter, and interval settings.
+//   - Any error that does not match temporaryErrors is considered terminal. In that case,
+//     the retry loop stops immediately and errs.Last is set to that error without
+//     performing further retries.
+//   - If the Retrier is configured with a registry, attempt and error information are
+//     recorded in the registry in the same way as for Do.
+//
+// When the maximum number of retries (MaxRetries) is reached without a successful (nil)
+// result, the last attempt error is wrapped with ErrMaxRetriesReached and appended to
+// errs.Attempts. In this case, errs.Last contains the last error returned by
+// retryableFunc.
+//
+// Context and timeout handling:
+//   - The provided ctx is observed on each attempt and during backoff delays. If ctx is
+//     canceled or its deadline is exceeded, DoWithContext stops retrying and returns
+//     immediately, with errs.Last set to the corresponding context error or any wrapped
+//     form produced by the internals of the retrier.
+//   - In addition to ctx, the Retrier's Timeout field enforces an overall timeout for the
+//     entire operation. If this timeout elapses first, DoWithContext stops retrying and
+//     returns with errs.Last set to ErrTimeoutReached (wrapped with the attempt number).
+//
+// Use DoWithContext when the operation being retried accepts a context and must support
+// cancellation. Use Do for retrying functions that do not take a context.
 func (r *Retrier) DoWithContext(ctx context.Context, retryableFunc RetryableFuncWithContext, temporaryErrors ...error) (errs *Errors) {
 	// get a new Errors object from the pool.
 	if obj, ok := r.errorsPool.Get().(*Errors); ok {
