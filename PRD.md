@@ -15,7 +15,7 @@
 ## Non-Goals
 
 - Redesign backoff or introduce new retry strategies.
-- Add new public APIs beyond documentation updates.
+- Avoid broad API expansion beyond a context-aware retry variant.
 
 ## Current Feature Inventory
 
@@ -43,6 +43,7 @@
 - Timeout path wraps `ErrTimeoutReached` as the cause.
 - When `temporaryErrors` is empty, use the registry if it has entries; if the registry is empty, retry all errors.
 - `MaxRetries` counts retries after the first attempt (total attempts = `MaxRetries + 1`).
+- Provide a context-aware retry method for long-running operations.
 - README reflects actual `Errors` fields and registry usage.
 
 ### Non-Functional
@@ -58,6 +59,7 @@
 - Return early on non-temporary errors when a list is provided.
 - Default to registry-based filtering when `temporaryErrors` is omitted (fallback to retry-all if registry is empty).
 - Update `MaxRetries` semantics to mean retries after the first attempt and document it.
+- Add a context-aware retry method for long-running operations.
 - Update README snippets and API notes to match current code.
 
 ## Acceptance Criteria
@@ -68,6 +70,7 @@
 - Timeout errors satisfy `errors.Is(err, ErrTimeoutReached)`.
 - Registry defaults are applied when no temporary list is provided (while retry-all still works when the registry is empty).
 - `MaxRetries` yields `MaxRetries + 1` total attempts.
+- Context-aware retry method returns when the passed context is canceled.
 - README examples compile against the current API.
 
 ## Test Plan
@@ -77,6 +80,7 @@
 - Assert `errors.Is(err, ErrTimeoutReached)` is true on timeouts.
 - Add a test verifying registry defaults are used when the temporary list is empty.
 - Add a test verifying `MaxRetries` yields `MaxRetries + 1` total attempts.
+- Add a test for context-aware retries honoring context cancellation.
 - Run `go test ./...`.
 
 ## Risks
@@ -89,7 +93,7 @@
 
 - `temporaryErrors` defaults to the registry when omitted; retry-all behavior remains when the registry is empty.
 - `MaxRetries` counts retries after the first attempt.
-- Long-running calls should be differentiated by documenting/encouraging context-aware retryable functions.
+- Long-running calls should be differentiated by offering a context-aware retry method.
 
 ## Dependencies
 

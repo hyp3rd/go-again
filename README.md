@@ -5,7 +5,7 @@
 `go-again` **thread safely** wraps a given function and executes it until it returns a nil error or exceeds the maximum number of retries.
 The configuration consists of the maximum number of retries (after the first attempt), the interval, a jitter to add a randomized backoff, the timeout, and a registry to store errors that you consider temporary, hence worth a retry.
 
-The `Do` method takes a context, a function, and an optional list of `temporary errors` as arguments. If the list is omitted and the registry has entries, the registry is used as the default filter; if the registry is empty, all errors are retried. It supports cancellation from the context and a channel invoking the `Cancel()` function; long-running operations should observe the context inside the retryable function.
+The `Do` method takes a context, a function, and an optional list of `temporary errors` as arguments. If the list is omitted and the registry has entries, the registry is used as the default filter; if the registry is empty, all errors are retried. It supports cancellation from the context and a channel invoking the `Cancel()` function. For long-running operations, use `DoWithContext` and observe cancellation inside the retryable function.
 The returned type is `Errors` which contains the list of errors returned at each attempt and the last error returned by the function.
 
 ```golang
@@ -66,6 +66,21 @@ Should you retry regardless of the error returned, call `Do` without passing any
             return http.ErrAbortHandler
         }
 
+        return nil
+    })
+    if errs.Last != nil {
+        // handle error
+    }
+```
+
+For long-running operations, pass a context-aware function:
+
+```go
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+
+    errs := retrier.DoWithContext(ctx, func(ctx context.Context) error {
+        // Do work and return ctx.Err() if canceled.
         return nil
     })
     if errs.Last != nil {

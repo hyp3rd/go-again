@@ -286,6 +286,31 @@ func TestDo_MaxRetriesCountsRetries(t *testing.T) {
 	}
 }
 
+func TestDoWithContext_Cancel(t *testing.T) {
+	r, err := again.NewRetrier(
+		context.Background(),
+		again.WithMaxRetries(1),
+		again.WithInterval(10*time.Millisecond),
+		again.WithTimeout(1*time.Second),
+	)
+	if err != nil {
+		t.Fatalf("failed to create retrier: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	errs := r.DoWithContext(ctx, func(ctx context.Context) error {
+		cancel()
+		<-ctx.Done()
+
+		return ctx.Err()
+	})
+
+	if errs.Last == nil || !errors.Is(errs.Last, context.Canceled) {
+		t.Errorf("expected last error to match %v, got %v", context.Canceled, errs.Last)
+	}
+}
+
 // Test stop retries.
 func TestStopRetries(t *testing.T) {
 	// Create a new Retrier with a small interval to speed up the test.
