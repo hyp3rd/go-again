@@ -116,14 +116,14 @@ func NewRetrier(ctx context.Context, opts ...Option) (retrier *Retrier, err erro
 		Logger:        slog.Default(),
 	}
 
-	retrier.errorsPool = sync.Pool{
-		New: func() any {
-			return &Errors{Attempts: make([]error, 0)}
-		},
-	}
-
 	// apply the options.
 	applyOptions(retrier, opts...)
+
+	retrier.errorsPool = sync.Pool{
+		New: func() any {
+			return &Errors{}
+		},
+	}
 
 	// validate the Retrier.
 	err = retrier.Validate()
@@ -255,6 +255,10 @@ func (r *Retrier) Do(ctx context.Context, retryableFunc RetryableFunc, temporary
 		}
 
 		// Record the error.
+		if errs.Attempts == nil {
+			errs.Attempts = make([]error, 0, r.MaxRetries+1)
+		}
+
 		errs.Attempts = append(errs.Attempts, err)
 
 		if !r.shouldRetry(err, temporaryErrors) {
@@ -273,7 +277,7 @@ func (r *Retrier) Do(ctx context.Context, retryableFunc RetryableFunc, temporary
 			r.Hooks.OnRetry(attempt, err)
 		}
 
-		if r.Logger != nil {
+		if r.Logger != nil && r.Logger.Enabled(ctx, slog.LevelDebug) {
 			r.Logger.Log(ctx, slog.LevelDebug, "retry", slog.Int("attempt", attempt), slog.Any("error", err))
 		}
 
@@ -497,6 +501,10 @@ func (r *Retrier) handleAttemptError(
 	temporaryErrors []error,
 ) attemptOutcome {
 	// Record the error.
+	if errs.Attempts == nil {
+		errs.Attempts = make([]error, 0, r.MaxRetries+1)
+	}
+
 	errs.Attempts = append(errs.Attempts, err)
 
 	if !r.shouldRetry(err, temporaryErrors) {
@@ -515,7 +523,7 @@ func (r *Retrier) handleAttemptError(
 		r.Hooks.OnRetry(attempt, err)
 	}
 
-	if r.Logger != nil {
+	if r.Logger != nil && r.Logger.Enabled(ctx, slog.LevelDebug) {
 		r.Logger.Log(ctx, slog.LevelDebug, "retry", slog.Int("attempt", attempt), slog.Any("error", err))
 	}
 
@@ -575,7 +583,7 @@ func (r *Retrier) ensureInitialized() {
 
 		if r.errorsPool.New == nil {
 			r.errorsPool.New = func() any {
-				return &Errors{Attempts: make([]error, 0, r.MaxRetries+1)}
+				return &Errors{}
 			}
 		}
 

@@ -2,21 +2,24 @@ package tests
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"testing"
 
+	"github.com/hyp3rd/ewrap"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/hyp3rd/go-again"
 )
 
+const errFailedToCreateRetrier = "failed to create retrier: %v"
+
 func TestRegistry(t *testing.T) {
+	t.Parallel()
 	// Create a new registry and load the default temporary errors.
 	registry := again.NewRegistry().LoadDefaults()
 
 	// Test registering a custom temporary error.
-	customError := errors.New("custom temporary error")
+	customError := ewrap.New("custom temporary error")
 	registry.RegisterTemporaryError(customError)
 	assert.True(t, registry.IsTemporaryError(customError))
 
@@ -35,23 +38,29 @@ func TestRegistry(t *testing.T) {
 
 // TestRegistryIsTemporaryError tests the registry IsTemporaryError function.
 func TestRegistryIsTemporaryError(t *testing.T) {
-	r := again.NewRegistry()
-	r.RegisterTemporaryError(http.ErrAbortHandler)
+	t.Parallel()
 
-	defer r.UnRegisterTemporaryError(http.ErrAbortHandler)
+	registry := again.NewRegistry()
+	registry.RegisterTemporaryError(http.ErrAbortHandler)
 
-	retrier, _ := again.NewRetrier(context.Background())
-	retrier.Registry = r
+	defer registry.UnRegisterTemporaryError(http.ErrAbortHandler)
 
-	if retrier.Registry.IsTemporaryError(http.ErrAbortHandler, http.ErrAbortHandler) != true {
-		t.Errorf("registry failed to register a temporary error")
+	retrier, err := again.NewRetrier(context.Background())
+	if err != nil {
+		t.Fatalf(errFailedToCreateRetrier, err)
 	}
 
-	if retrier.Registry.IsTemporaryError(http.ErrSkipAltProtocol, http.ErrHandlerTimeout) != false {
-		t.Errorf("registry failed to validate temporary error")
+	retrier.Registry = registry
+
+	if !retrier.Registry.IsTemporaryError(http.ErrAbortHandler, http.ErrAbortHandler) {
+		t.Error("registry failed to register a temporary error")
 	}
 
-	if retrier.Registry.IsTemporaryError(http.ErrAbortHandler, http.ErrHandlerTimeout) != false {
-		t.Errorf("registry failed to validate temporary error")
+	if retrier.Registry.IsTemporaryError(http.ErrSkipAltProtocol, http.ErrHandlerTimeout) {
+		t.Error("registry failed to validate temporary error")
+	}
+
+	if retrier.Registry.IsTemporaryError(http.ErrAbortHandler, http.ErrHandlerTimeout) {
+		t.Error("registry failed to validate temporary error")
 	}
 }

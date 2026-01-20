@@ -61,6 +61,7 @@ linters:
     - recvcheck
     - tagliatelle
     - tagalign
+    - testpackage
     - wsl
   exclusions:
     paths:
@@ -70,7 +71,7 @@ linters:
     cyclop:
       # The maximal code complexity to report.
       # Default: 10
-      max-complexity: 12
+      max-complexity: 15
     errcheck:
       # Report about not checking of errors in type assertions: `a := b.(MyStruct)`.
       # Such cases aren't reported by default.

@@ -99,14 +99,16 @@ You can extend the list with your errors by calling the `RegisterTemporaryError`
 A retrier certainly adds overhead to the execution of a function. `go-again` is designed to produce a minimal impact on the performance of your code, keeping thread safety and flexibility. The following benchmark shows the overhead of a retrier with 5 retries, 1s interval, 10ms jitter, and 1s timeout:
 
 ```bash
-go test -bench=. -benchmem -benchtime=4s . -timeout 30m
+go test -bench=. -benchtime=3s -benchmem -run=^-memprofile=mem.out ./...
+?    github.com/hyp3rd/go-again [no test files]
 goos: darwin
 goarch: arm64
 pkg: github.com/hyp3rd/go-again/tests
 cpu: Apple M2 Pro
-BenchmarkRetry-12       337406      13686 ns/op     5378 B/op       1 allocs/op
+BenchmarkRetry-12                12622006       277.6 ns/op       48 B/op        1 allocs/op
+BenchmarkRetryWithRetries-12        93937       38345 ns/op      144 B/op        2 allocs/op
 PASS
-ok   github.com/hyp3rd/go-again/tests 40.587s
+ok   github.com/hyp3rd/go-again/tests 8.498s
 ```
 
 ## Installation
@@ -117,7 +119,7 @@ go get github.com/hyp3rd/go-again
 
 ## Usage
 
-For examples with cancellation, see [**examples**](./examples). To run the examples you can leverage the `Makefile`:
+For examples with cancellation, see [**examples**](__examples). To run the examples you can leverage the `Makefile`:
 
 ```bash
 make run example=chan
@@ -135,6 +137,8 @@ import (
     "fmt"
     "time"
 
+    "github.com/hyp3rd/ewrap"
+
     "github.com/hyp3rd/go-again"
 )
 
@@ -149,7 +153,7 @@ func main() {
     }
 
     // Register a temporary error.
-    tempErr := errors.New("temporary error")
+    tempErr := ewrap.New("temporary error")
     retrier.Registry.RegisterTemporaryError(tempErr)
 
     // Retry a function.
@@ -173,4 +177,5 @@ I'm a surfer, a crypto trader, and a software architect with 15 years of experie
 
 [build-link]: https://github.com/hyp3rd/go-again/actions/workflows/go.yml
 [codeql-link]: https://github.com/hyp3rd/go-again/actions/workflows/codeql.yml
+
 [codacy-security-scan-link]:
