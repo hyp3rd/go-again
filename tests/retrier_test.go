@@ -13,39 +13,48 @@ import (
 	"github.com/hyp3rd/go-again"
 )
 
+var errTemporary = ewrap.New("temporary error")
+
+const (
+	errRetryCountMismatch = "retry did not retry the function the expected number of times. Got: %d, Expecting: %d"
+	errNonTemporary       = "non-temporary error"
+)
+
 func TestNewRetrier(t *testing.T) {
-	r, err := again.NewRetrier(context.Background())
+	t.Parallel()
+
+	retrier, err := again.NewRetrier(context.Background())
 	if err != nil {
 		t.Errorf("failed to create new Retrier: %v", err)
 	}
 
 	// Test default values.
-	if r.MaxRetries != 5 {
-		t.Errorf("unexpected value for MaxRetries: got %d, want %d", r.MaxRetries, 5)
+	if retrier.MaxRetries != 5 {
+		t.Errorf("unexpected value for MaxRetries: got %d, want %d", retrier.MaxRetries, 5)
 	}
 
-	if r.Jitter != 1*time.Second {
-		t.Errorf("unexpected value for Jitter: got %v, want %v", r.Jitter, 1*time.Second)
+	if retrier.Jitter != 1*time.Second {
+		t.Errorf("unexpected value for Jitter: got %v, want %v", retrier.Jitter, 1*time.Second)
 	}
 
-	if r.BackoffFactor != 2 {
-		t.Errorf("unexpected value for BackoffFactor: got %v, want %v", r.BackoffFactor, 2)
+	if retrier.BackoffFactor != 2 {
+		t.Errorf("unexpected value for BackoffFactor: got %v, want %v", retrier.BackoffFactor, 2)
 	}
 
-	if r.Interval != 500*time.Millisecond {
-		t.Errorf("unexpected value for Interval: got %v, want %v", r.Interval, 500*time.Millisecond)
+	if retrier.Interval != 500*time.Millisecond {
+		t.Errorf("unexpected value for Interval: got %v, want %v", retrier.Interval, 500*time.Millisecond)
 	}
 
-	if r.Timeout != 20*time.Second {
-		t.Errorf("unexpected value for Timeout: got %v, want %v", r.Timeout, 20*time.Second)
+	if retrier.Timeout != 20*time.Second {
+		t.Errorf("unexpected value for Timeout: got %v, want %v", retrier.Timeout, 20*time.Second)
 	}
 
-	if r.Registry == nil {
-		t.Errorf("unexpected value for Registry: got nil, want not nil")
+	if retrier.Registry == nil {
+		t.Error("unexpected value for Registry: got nil, want not nil")
 	}
 
 	// Test setting options.
-	r, err = again.NewRetrier(
+	retrier, err = again.NewRetrier(
 		context.Background(),
 		again.WithMaxRetries(10),
 		again.WithJitter(2*time.Second),
@@ -57,24 +66,24 @@ func TestNewRetrier(t *testing.T) {
 		t.Errorf("failed to create new Retrier: %v", err)
 	}
 
-	if r.MaxRetries != 10 {
-		t.Errorf("unexpected value for MaxRetries: got %d, want %d", r.MaxRetries, 10)
+	if retrier.MaxRetries != 10 {
+		t.Errorf("unexpected value for MaxRetries: got %d, want %d", retrier.MaxRetries, 10)
 	}
 
-	if r.Jitter != 2*time.Second {
-		t.Errorf("unexpected value for Jitter: got %v, want %v", r.Jitter, 2*time.Second)
+	if retrier.Jitter != 2*time.Second {
+		t.Errorf("unexpected value for Jitter: got %v, want %v", retrier.Jitter, 2*time.Second)
 	}
 
-	if r.BackoffFactor != 3 {
-		t.Errorf("unexpected value for BackoffFactor: got %v, want %v", r.BackoffFactor, 3)
+	if retrier.BackoffFactor != 3 {
+		t.Errorf("unexpected value for BackoffFactor: got %v, want %v", retrier.BackoffFactor, 3)
 	}
 
-	if r.Interval != 1*time.Second {
-		t.Errorf("unexpected value for Interval: got %v, want %v", r.Interval, 1*time.Second)
+	if retrier.Interval != 1*time.Second {
+		t.Errorf("unexpected value for Interval: got %v, want %v", retrier.Interval, 1*time.Second)
 	}
 
-	if r.Timeout != 30*time.Second {
-		t.Errorf("unexpected value for Timeout: got %v, want %v", r.Timeout, 30*time.Second)
+	if retrier.Timeout != 30*time.Second {
+		t.Errorf("unexpected value for Timeout: got %v, want %v", retrier.Timeout, 30*time.Second)
 	}
 
 	// Test invalid options.
@@ -82,37 +91,43 @@ func TestNewRetrier(t *testing.T) {
 		again.WithMaxRetries(-1),
 	)
 	if err == nil {
-		t.Errorf("expected error for invalid MaxRetries option, got nil")
+		t.Error("expected error for invalid MaxRetries option, got nil")
 	}
 }
 
 func TestRetrier_Validate(t *testing.T) {
+	t.Parallel()
+
 	// Test valid Retrier.
-	r := &again.Retrier{
+	retrier := &again.Retrier{
 		MaxRetries:    5,
 		Jitter:        1 * time.Second,
 		BackoffFactor: 2,
 		Interval:      500 * time.Millisecond,
 		Timeout:       20 * time.Second,
 	}
-	if err := r.Validate(); err != nil {
+
+	err := retrier.Validate()
+	if err != nil {
 		t.Errorf("failed to validate Retrier: %v", err)
 	}
 
 	// Test zero MaxRetries is valid.
-	r = &again.Retrier{
+	retrier = &again.Retrier{
 		MaxRetries:    0,
 		Jitter:        1 * time.Second,
 		BackoffFactor: 2,
 		Interval:      500 * time.Millisecond,
 		Timeout:       20 * time.Second,
 	}
-	if err := r.Validate(); err != nil {
+
+	err = retrier.Validate()
+	if err != nil {
 		t.Errorf("failed to validate Retrier with zero MaxRetries: %v", err)
 	}
 
 	// Test invalid MaxRetries.
-	r = &again.Retrier{
+	retrier = &again.Retrier{
 		MaxRetries:    -1,
 		Jitter:        1 * time.Second,
 		BackoffFactor: 2,
@@ -120,13 +135,13 @@ func TestRetrier_Validate(t *testing.T) {
 		Timeout:       10 * time.Second,
 	}
 
-	err := r.Validate()
+	err = retrier.Validate()
 	if err == nil || !errors.Is(err, again.ErrInvalidRetrier) || !strings.Contains(err.Error(), "invalid max retries") {
 		t.Errorf("expected invalid max retries error, got %v", err)
 	}
 
 	// Test invalid BackoffFactor.
-	r = &again.Retrier{
+	retrier = &again.Retrier{
 		MaxRetries:    5,
 		Jitter:        1 * time.Second,
 		BackoffFactor: 1,
@@ -134,13 +149,13 @@ func TestRetrier_Validate(t *testing.T) {
 		Timeout:       10 * time.Second,
 	}
 
-	err = r.Validate()
+	err = retrier.Validate()
 	if err == nil || !errors.Is(err, again.ErrInvalidRetrier) || !strings.Contains(err.Error(), "backoff factor") {
 		t.Errorf("expected invalid backoff factor error, got %v", err)
 	}
 
 	// Test invalid Interval and Timeout.
-	r = &again.Retrier{
+	retrier = &again.Retrier{
 		MaxRetries:    5,
 		Jitter:        1 * time.Second,
 		BackoffFactor: 2,
@@ -148,13 +163,13 @@ func TestRetrier_Validate(t *testing.T) {
 		Timeout:       1 * time.Second,
 	}
 
-	err = r.Validate()
+	err = retrier.Validate()
 	if err == nil || !errors.Is(err, again.ErrInvalidRetrier) || !strings.Contains(err.Error(), "interval") {
 		t.Errorf("expected invalid interval error, got %v", err)
 	}
 
 	// Test invalid Interval * MaxRetries.
-	r = &again.Retrier{
+	retrier = &again.Retrier{
 		MaxRetries:    5,
 		Jitter:        1 * time.Second,
 		BackoffFactor: 2,
@@ -162,7 +177,7 @@ func TestRetrier_Validate(t *testing.T) {
 		Timeout:       5 * time.Second,
 	}
 
-	err = r.Validate()
+	err = retrier.Validate()
 	if err == nil || !errors.Is(err, again.ErrInvalidRetrier) || !strings.Contains(err.Error(), "multiplied by max retries") {
 		t.Errorf("expected invalid interval*max retries error, got %v", err)
 	}
@@ -170,49 +185,73 @@ func TestRetrier_Validate(t *testing.T) {
 
 // TestDo tests the Do function.
 func TestDo(t *testing.T) {
+	t.Parallel()
+
 	// Test successful execution.
 	retryableFunc := func() error {
 		return nil
 	}
-	r, _ := again.NewRetrier(context.Background())
 
-	errs := r.Do(context.Background(), retryableFunc)
+	retrier, err := again.NewRetrier(context.Background())
+	if err != nil {
+		t.Fatalf(errFailedToCreateRetrier, err)
+	}
+
+	errs := retrier.Do(context.Background(), retryableFunc)
 	if errs.Last != nil {
 		t.Errorf("unexpected error: %v", errs.Last)
 	}
 
 	// Test non-temporary error.
 	retryableFunc = func() error {
-		return errors.New("non-temporary error")
+		return ewrap.New(errNonTemporary)
 	}
 
-	errs = r.Do(context.Background(), retryableFunc)
-	if errs.Last == nil || errs.Last.Error() != "non-temporary error" {
-		t.Errorf("expected error %q, but got %v", "non-temporary error", errs.Last)
+	rNonTemp, err := again.NewRetrier(
+		context.Background(),
+		again.WithMaxRetries(0),
+		again.WithInterval(10*time.Millisecond),
+		again.WithTimeout(1*time.Second),
+	)
+	if err != nil {
+		t.Fatalf(errFailedToCreateRetrier, err)
+	}
+
+	errs = rNonTemp.Do(context.Background(), retryableFunc)
+	if errs.Last == nil || errs.Last.Error() != errNonTemporary {
+		t.Errorf("expected error %q, but got %v", errNonTemporary, errs.Last)
 	}
 
 	// Test temporary error.
-	r.SetRegistry(again.NewRegistry())
+	err = retrier.SetRegistry(again.NewRegistry())
+	if err != nil {
+		t.Fatalf(errFailedToCreateRetrier, err)
+	}
 
-	customError := errors.New("temporary error")
-	r.Registry.RegisterTemporaryError(customError)
+	customError := errTemporary
+	retrier.Registry.RegisterTemporaryError(customError)
 
 	retryableFunc = func() error {
 		return customError
 	}
 
-	errs = r.Do(context.Background(), retryableFunc, customError)
+	errs = retrier.Do(context.Background(), retryableFunc, customError)
 	if errs.Last == nil || errs.Last.Error() != "temporary error" {
 		t.Errorf("unexpected error: %v", errs.Last)
 	}
 
 	// Test max retries.
-	tempErr := errors.New("temporary error")
+	tempErr := errTemporary
 	retryableFunc = func() error {
 		return tempErr
 	}
-	r, _ = again.NewRetrier(context.Background(), again.WithMaxRetries(1))
-	errs = r.Do(context.Background(), retryableFunc, tempErr)
+
+	retrier, err = again.NewRetrier(context.Background(), again.WithMaxRetries(1))
+	if err != nil {
+		t.Fatalf(errFailedToCreateRetrier, err)
+	}
+
+	errs = retrier.Do(context.Background(), retryableFunc, tempErr)
 	failure := errs.Attempts[len(errs.Attempts)-1]
 
 	expected := again.ErrMaxRetriesReached.Error()
@@ -223,17 +262,19 @@ func TestDo(t *testing.T) {
 }
 
 func TestDo_NonTemporaryStopsEarly(t *testing.T) {
-	r, err := again.NewRetrier(context.Background())
+	t.Parallel()
+
+	retrier, err := again.NewRetrier(context.Background())
 	if err != nil {
-		t.Fatalf("failed to create retrier: %v", err)
+		t.Fatalf(errFailedToCreateRetrier, err)
 	}
 
 	var attempts int
 
-	nonTempErr := errors.New("non-temporary error")
-	tempErr := errors.New("temporary error")
+	nonTempErr := ewrap.New(errNonTemporary)
+	tempErr := errTemporary
 
-	errs := r.Do(context.Background(), func() error {
+	errs := retrier.Do(context.Background(), func() error {
 		attempts++
 
 		return nonTempErr
@@ -252,26 +293,28 @@ func TestDo_NonTemporaryStopsEarly(t *testing.T) {
 	}
 
 	if strings.Contains(errs.Attempts[0].Error(), again.ErrMaxRetriesReached.Error()) {
-		t.Errorf("did not expect max retries error to be recorded")
+		t.Error("did not expect max retries error to be recorded")
 	}
 }
 
 func TestDo_MaxRetriesCountsRetries(t *testing.T) {
-	r, err := again.NewRetrier(
+	t.Parallel()
+
+	retrier, err := again.NewRetrier(
 		context.Background(),
 		again.WithMaxRetries(0),
 		again.WithInterval(10*time.Millisecond),
 		again.WithTimeout(1*time.Second),
 	)
 	if err != nil {
-		t.Fatalf("failed to create retrier: %v", err)
+		t.Fatalf(errFailedToCreateRetrier, err)
 	}
 
 	var attempts int
 
-	tempErr := errors.New("temporary error")
+	tempErr := errTemporary
 
-	errs := r.Do(context.Background(), func() error {
+	errs := retrier.Do(context.Background(), func() error {
 		attempts++
 
 		return tempErr
@@ -287,19 +330,21 @@ func TestDo_MaxRetriesCountsRetries(t *testing.T) {
 }
 
 func TestDoWithContext_Cancel(t *testing.T) {
-	r, err := again.NewRetrier(
+	t.Parallel()
+
+	retrier, err := again.NewRetrier(
 		context.Background(),
 		again.WithMaxRetries(1),
 		again.WithInterval(10*time.Millisecond),
 		again.WithTimeout(1*time.Second),
 	)
 	if err != nil {
-		t.Fatalf("failed to create retrier: %v", err)
+		t.Fatalf(errFailedToCreateRetrier, err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	errs := r.DoWithContext(ctx, func(ctx context.Context) error {
+	errs := retrier.DoWithContext(ctx, func(ctx context.Context) error {
 		cancel()
 		<-ctx.Done()
 
@@ -313,8 +358,10 @@ func TestDoWithContext_Cancel(t *testing.T) {
 
 // Test stop retries.
 func TestStopRetries(t *testing.T) {
+	t.Parallel()
+
 	// Create a new Retrier with a small interval to speed up the test.
-	r, err := again.NewRetrier(context.Background(), again.WithInterval(10*time.Millisecond), again.WithTimeout(5*time.Second))
+	retrier, err := again.NewRetrier(context.Background(), again.WithInterval(10*time.Millisecond), again.WithTimeout(5*time.Second))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -329,13 +376,13 @@ func TestStopRetries(t *testing.T) {
 		count++
 
 		time.Sleep(100 * time.Millisecond)
-		r.Cancel()
+		retrier.Cancel()
 
 		return ewrap.New("error")
 	}
 
 	// Call the retry function.
-	errs := r.Do(ctx, retryableFunc)
+	errs := retrier.Do(ctx, retryableFunc)
 
 	defer cancel()
 
@@ -352,9 +399,14 @@ func TestStopRetries(t *testing.T) {
 
 // TestWithoutRegistry tests the retry function without a registry.
 func TestWithoutRegistry(t *testing.T) {
+	t.Parallel()
+
 	var retryCount int
 
-	retrier, _ := again.NewRetrier(context.Background())
+	retrier, err := again.NewRetrier(context.Background())
+	if err != nil {
+		t.Fatalf(errFailedToCreateRetrier, err)
+	}
 
 	errs := retrier.Do(context.TODO(), func() error {
 		retryCount++
@@ -370,15 +422,21 @@ func TestWithoutRegistry(t *testing.T) {
 	}
 
 	if retryCount != 3 {
-		t.Errorf("retry did not retry the function the expected number of times. Got: %d, Expecting: %d", retryCount, 1)
+		t.Errorf(errRetryCountMismatch, retryCount, 3)
 	}
 }
 
 // TestRetryWithDefaults tests the retry function with the default registry.
 func TestRetryWithDefaults(t *testing.T) {
+	t.Parallel()
+
 	var retryCount int
 
-	retrier, _ := again.NewRetrier(context.Background())
+	retrier, err := again.NewRetrier(context.Background())
+	if err != nil {
+		t.Fatalf(errFailedToCreateRetrier, err)
+	}
+
 	retrier.Registry.LoadDefaults()
 
 	defer retrier.Registry.Clean()
@@ -397,14 +455,20 @@ func TestRetryWithDefaults(t *testing.T) {
 	}
 
 	if retryCount != 3 {
-		t.Errorf("retry did not retry the function the expected number of times. Got: %d, Expecting: %d", retryCount, 3)
+		t.Errorf(errRetryCountMismatch, retryCount, 3)
 	}
 }
 
 func TestRetryWithDefaultsWithoutList(t *testing.T) {
+	t.Parallel()
+
 	var retryCount int
 
-	retrier, _ := again.NewRetrier(context.Background())
+	retrier, err := again.NewRetrier(context.Background())
+	if err != nil {
+		t.Fatalf(errFailedToCreateRetrier, err)
+	}
+
 	retrier.Registry.LoadDefaults()
 
 	defer retrier.Registry.Clean()
@@ -423,11 +487,13 @@ func TestRetryWithDefaultsWithoutList(t *testing.T) {
 	}
 
 	if retryCount != 3 {
-		t.Errorf("retry did not retry the function the expected number of times. Got: %d, Expecting: %d", retryCount, 3)
+		t.Errorf(errRetryCountMismatch, retryCount, 3)
 	}
 }
 
 func TestRetryTimeout(t *testing.T) {
+	t.Parallel()
+
 	var retryCount int
 
 	retrier, err := again.NewRetrier(
@@ -437,7 +503,7 @@ func TestRetryTimeout(t *testing.T) {
 		again.WithMaxRetries(3),
 	)
 	if err != nil {
-		t.Fatalf("failed to create retrier: %v", err)
+		t.Fatalf(errFailedToCreateRetrier, err)
 	}
 
 	retrier.Registry.RegisterTemporaryError(http.ErrAbortHandler)
@@ -456,7 +522,7 @@ func TestRetryTimeout(t *testing.T) {
 	}, http.ErrAbortHandler)
 
 	if errs.Last == nil {
-		t.Errorf("was expecting a timeout error")
+		t.Error("was expecting a timeout error")
 	}
 
 	if !errors.Is(errs.Last, again.ErrTimeoutReached) {
@@ -465,7 +531,9 @@ func TestRetryTimeout(t *testing.T) {
 }
 
 func TestDo_ManualRetrierInitialization(t *testing.T) {
-	r := &again.Retrier{
+	t.Parallel()
+
+	retrier := &again.Retrier{
 		MaxRetries:    2,
 		Jitter:        1 * time.Millisecond,
 		BackoffFactor: 2,
@@ -473,31 +541,37 @@ func TestDo_ManualRetrierInitialization(t *testing.T) {
 		Timeout:       10 * time.Millisecond,
 	}
 
-	tempErr := errors.New("temporary error")
-	errs := r.Do(context.Background(), func() error {
+	tempErr := errTemporary
+	errs := retrier.Do(context.Background(), func() error {
 		return again.ErrOperationFailed
 	}, tempErr)
 
 	if errs.Last == nil {
-		t.Fatalf("expected last error, got nil")
+		t.Fatal("expected last error, got nil")
 	}
 
 	if !errors.Is(errs.Last, again.ErrOperationFailed) {
 		t.Errorf("expected last error to match %v, got %v", again.ErrOperationFailed, errs.Last)
 	}
 
-	if r.Registry == nil {
-		t.Errorf("expected registry to be initialized")
+	if retrier.Registry == nil {
+		t.Error("expected registry to be initialized")
 	}
 }
 
 func TestRetryWithContextCancel(t *testing.T) {
+	t.Parallel()
+
 	var retryCount int
 
-	retrier, _ := again.NewRetrier(
+	retrier, err := again.NewRetrier(
 		context.Background(),
 		again.WithTimeout(10*time.Second),
 	)
+	if err != nil {
+		t.Fatalf(errFailedToCreateRetrier, err)
+	}
+
 	retrier.Registry.RegisterTemporaryError(http.ErrAbortHandler)
 
 	defer retrier.Registry.UnRegisterTemporaryError(http.ErrAbortHandler)
@@ -520,17 +594,23 @@ func TestRetryWithContextCancel(t *testing.T) {
 	}
 
 	if retryCount != 1 {
-		t.Errorf("retry did not retry the function the expected number of times. Got: %d, Expecting: %d", retryCount, 1)
+		t.Errorf(errRetryCountMismatch, retryCount, 1)
 	}
 }
 
 func TestRetryWithChannelCancel(t *testing.T) {
+	t.Parallel()
+
 	var retryCount int
 
-	retrier, _ := again.NewRetrier(
+	retrier, err := again.NewRetrier(
 		context.Background(),
 		again.WithTimeout(10*time.Second),
 	)
+	if err != nil {
+		t.Fatalf(errFailedToCreateRetrier, err)
+	}
+
 	retrier.Registry.RegisterTemporaryError(http.ErrAbortHandler)
 
 	defer retrier.Registry.UnRegisterTemporaryError(http.ErrAbortHandler)
@@ -552,14 +632,18 @@ func TestRetryWithChannelCancel(t *testing.T) {
 	}
 
 	if retryCount != 1 {
-		t.Errorf("retry did not retry the function the expected number of times. Got: %d, Expecting: %d", retryCount, 1)
+		t.Errorf(errRetryCountMismatch, retryCount, 1)
 	}
 }
 
 func BenchmarkRetry(b *testing.B) {
-	r, _ := again.NewRetrier(context.Background())
-	tempErr := errors.New("temporary error")
-	r.Registry.RegisterTemporaryError(tempErr)
+	retrier, err := again.NewRetrier(context.Background())
+	if err != nil {
+		b.Fatalf(errFailedToCreateRetrier, err)
+	}
+
+	tempErr := errTemporary
+	retrier.Registry.RegisterTemporaryError(tempErr)
 
 	var retryCount int
 
@@ -574,7 +658,7 @@ func BenchmarkRetry(b *testing.B) {
 		}
 
 		b.StartTimer()
-		r.Do(context.TODO(), fn, tempErr)
+		retrier.Do(context.TODO(), fn, tempErr)
 		b.StopTimer()
 	}
 }

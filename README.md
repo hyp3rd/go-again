@@ -149,7 +149,7 @@ func main() {
     }
 
     // Register a temporary error.
-    tempErr := errors.New("temporary error")
+    tempErr := ewrap.New("temporary error")
     retrier.Registry.RegisterTemporaryError(tempErr)
 
     // Retry a function.
@@ -173,4 +173,5 @@ I'm a surfer, a crypto trader, and a software architect with 15 years of experie
 
 [build-link]: https://github.com/hyp3rd/go-again/actions/workflows/go.yml
 [codeql-link]: https://github.com/hyp3rd/go-again/actions/workflows/codeql.yml
+
 [codacy-security-scan-link]:

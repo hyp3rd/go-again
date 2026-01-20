@@ -61,6 +61,7 @@ linters:
     - recvcheck
     - tagliatelle
     - tagalign
+    - testpackage
     - wsl
   exclusions:
     paths:

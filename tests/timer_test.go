@@ -8,6 +8,8 @@ import (
 )
 
 func TestTimerPool(t *testing.T) {
+	t.Parallel()
+
 	poolSize := 5
 	timeout := time.Second
 
@@ -66,6 +68,8 @@ func TestTimerPool(t *testing.T) {
 }
 
 func TestTimerPool_PutClosed(t *testing.T) {
+	t.Parallel()
+
 	poolSize := 5
 	timeout := time.Second
 
@@ -87,6 +91,8 @@ func TestTimerPool_PutClosed(t *testing.T) {
 }
 
 func TestTimerPool_Reuse(t *testing.T) {
+	t.Parallel()
+
 	poolSize := 1
 	timeout := time.Second
 
