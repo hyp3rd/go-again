@@ -219,6 +219,33 @@ func main() {
 
 Supported methods for request and callback: `GET`, `POST`, `PUT`. If the callback URL is empty, no callback is sent.
 
+To relax URL validation for local HTTPS targets (localhost/private IPs):
+
+```go
+import (
+    "github.com/hyp3rd/go-again/pkg/scheduler"
+    "github.com/hyp3rd/sectools/pkg/validate"
+)
+
+validator, _ := validate.NewURLValidator(
+    validate.WithURLAllowPrivateIP(true),
+    validate.WithURLAllowLocalhost(true),
+    validate.WithURLAllowIPLiteral(true),
+)
+
+s := scheduler.NewScheduler(
+    scheduler.WithURLValidator(validator),
+)
+```
+
+To allow non-HTTPS endpoints, disable validation entirely:
+
+```go
+s := scheduler.NewScheduler(
+    scheduler.WithURLValidator(nil),
+)
+```
+
 #### Scheduler Options
 
 - `WithHTTPClient` uses a custom HTTP client for requests and callbacks.

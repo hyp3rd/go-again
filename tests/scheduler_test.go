@@ -20,6 +20,9 @@ import (
 const (
 	schedulerTimeout = 200 * time.Millisecond
 	schedulerRetries = 5
+	targetPath       = "/target"
+	callbackPath     = "/callback"
+	scheduleJobError = "failed to schedule job: %v"
 )
 
 //nolint:funlen
@@ -31,7 +34,7 @@ func TestSchedulerRetryAndCallback(t *testing.T) {
 	callbackCh := make(chan scheduler.CallbackPayload, 1)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/target", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc(targetPath, func(w http.ResponseWriter, _ *http.Request) {
 		hit := atomic.AddInt32(&targetHits, 1)
 		if hit < 3 {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -52,7 +55,7 @@ func TestSchedulerRetryAndCallback(t *testing.T) {
 		}
 	})
 
-	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(callbackPath, func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			err := r.Body.Close()
 			if err != nil {
@@ -99,10 +102,10 @@ func TestSchedulerRetryAndCallback(t *testing.T) {
 		},
 		Request: scheduler.Request{
 			Method: http.MethodGet,
-			URL:    server.URL + "/target",
+			URL:    server.URL + targetPath,
 		},
 		Callback: scheduler.Callback{
-			URL: server.URL + "/callback",
+			URL: server.URL + callbackPath,
 		},
 		RetryPolicy: scheduler.RetryPolicy{
 			Retrier:          retrier,
@@ -112,7 +115,7 @@ func TestSchedulerRetryAndCallback(t *testing.T) {
 
 	jobID, err := sched.Schedule(job)
 	if err != nil {
-		t.Fatalf("failed to schedule job: %v", err)
+		t.Fatalf(scheduleJobError, err)
 	}
 
 	select {
@@ -167,6 +170,21 @@ func TestSchedulerValidation(t *testing.T) {
 	if err == nil || !errors.Is(err, scheduler.ErrInvalidJob) {
 		t.Fatalf("expected invalid job error, got %v", err)
 	}
+
+	_, err = sched.Schedule(scheduler.Job{
+		Schedule: scheduler.Schedule{
+			Every:   time.Second,
+			StartAt: time.Now().Add(1 * time.Minute),
+			EndAt:   time.Now(),
+		},
+		Request: scheduler.Request{
+			Method: http.MethodGet,
+			URL:    "https://example.com",
+		},
+	})
+	if err == nil || !errors.Is(err, scheduler.ErrInvalidJob) {
+		t.Fatalf("expected invalid job error, got %v", err)
+	}
 }
 
 func newTestURLValidator(t *testing.T) *validate.URLValidator {
@@ -184,13 +202,119 @@ func newTestURLValidator(t *testing.T) *validate.URLValidator {
 	return validator
 }
 
+func TestSchedulerURLValidationRejectsHTTP(t *testing.T) {
+	t.Parallel()
+
+	sched := scheduler.NewScheduler()
+	defer sched.Stop()
+
+	_, err := sched.Schedule(scheduler.Job{
+		Schedule: scheduler.Schedule{
+			Every: time.Second,
+		},
+		Request: scheduler.Request{
+			Method: http.MethodGet,
+			URL:    "http://example.com",
+		},
+	})
+	if err == nil || !errors.Is(err, scheduler.ErrInvalidJob) {
+		t.Fatalf("expected invalid job error, got %v", err)
+	}
+}
+
+func TestSchedulerURLValidationDisabledAllowsHTTP(t *testing.T) {
+	t.Parallel()
+
+	hitCh := make(chan struct{}, 1)
+
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		select {
+		case hitCh <- struct{}{}:
+		default:
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+
+	sched := scheduler.NewScheduler(
+		scheduler.WithURLValidator(nil),
+	)
+	defer sched.Stop()
+
+	_, err := sched.Schedule(scheduler.Job{
+		Schedule: scheduler.Schedule{
+			Every:   5 * time.Millisecond,
+			MaxRuns: 1,
+		},
+		Request: scheduler.Request{
+			Method: http.MethodGet,
+			URL:    target.URL,
+		},
+	})
+	if err != nil {
+		t.Fatalf(scheduleJobError, err)
+	}
+
+	select {
+	case <-hitCh:
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out waiting for target hit")
+	}
+}
+
+func TestSchedulerEndAtInPastStopsImmediately(t *testing.T) {
+	t.Parallel()
+
+	hitCh := make(chan struct{}, 1)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(targetPath, func(w http.ResponseWriter, _ *http.Request) {
+		select {
+		case hitCh <- struct{}{}:
+		default:
+		}
+
+		w.WriteHeader(http.StatusOK)
+	})
+
+	server := httptest.NewTLSServer(mux)
+	defer server.Close()
+
+	sched := scheduler.NewScheduler(
+		scheduler.WithHTTPClient(server.Client()),
+		scheduler.WithURLValidator(newTestURLValidator(t)),
+	)
+	defer sched.Stop()
+
+	_, err := sched.Schedule(scheduler.Job{
+		Schedule: scheduler.Schedule{
+			Every: 5 * time.Millisecond,
+			EndAt: time.Now().Add(-100 * time.Millisecond),
+		},
+		Request: scheduler.Request{
+			Method: http.MethodGet,
+			URL:    server.URL + targetPath,
+		},
+	})
+	if err != nil {
+		t.Fatalf(scheduleJobError, err)
+	}
+
+	select {
+	case <-hitCh:
+		t.Fatal("expected scheduler to skip runs after end time")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func TestSchedulerMaxRunsStops(t *testing.T) {
 	t.Parallel()
 
 	hitCh := make(chan struct{}, schedulerRetries)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/target", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc(targetPath, func(w http.ResponseWriter, _ *http.Request) {
 		select {
 		case hitCh <- struct{}{}:
 		default:
@@ -215,11 +339,11 @@ func TestSchedulerMaxRunsStops(t *testing.T) {
 		},
 		Request: scheduler.Request{
 			Method: http.MethodGet,
-			URL:    server.URL + "/target",
+			URL:    server.URL + targetPath,
 		},
 	})
 	if err != nil {
-		t.Fatalf("failed to schedule job: %v", err)
+		t.Fatalf(scheduleJobError, err)
 	}
 
 	for i := range 2 {
@@ -237,6 +361,144 @@ func TestSchedulerMaxRunsStops(t *testing.T) {
 	}
 }
 
+func TestSchedulerRemoveCancels(t *testing.T) {
+	t.Parallel()
+
+	hitCh := make(chan struct{}, 1)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(targetPath, func(w http.ResponseWriter, _ *http.Request) {
+		select {
+		case hitCh <- struct{}{}:
+		default:
+		}
+
+		w.WriteHeader(http.StatusOK)
+	})
+
+	server := httptest.NewTLSServer(mux)
+	defer server.Close()
+
+	sched := scheduler.NewScheduler(
+		scheduler.WithHTTPClient(server.Client()),
+		scheduler.WithURLValidator(newTestURLValidator(t)),
+	)
+	defer sched.Stop()
+
+	jobID, err := sched.Schedule(scheduler.Job{
+		Schedule: scheduler.Schedule{
+			Every:   50 * time.Millisecond,
+			StartAt: time.Now().Add(200 * time.Millisecond),
+		},
+		Request: scheduler.Request{
+			Method: http.MethodGet,
+			URL:    server.URL + targetPath,
+		},
+	})
+	if err != nil {
+		t.Fatalf(scheduleJobError, err)
+	}
+
+	if !sched.Remove(jobID) {
+		t.Fatalf("expected job %q to be removed", jobID)
+	}
+
+	select {
+	case <-hitCh:
+		t.Fatal("expected no hits after remove")
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+func TestSchedulerNonRetryableStatus(t *testing.T) {
+	t.Parallel()
+
+	callbackCh := make(chan scheduler.CallbackPayload, 1)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(targetPath, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	})
+
+	mux.HandleFunc(callbackPath, func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			err := r.Body.Close()
+			if err != nil {
+				t.Logf("failed to close request body: %v", err)
+			}
+		}()
+
+		var payload scheduler.CallbackPayload
+
+		err := json.NewDecoder(r.Body).Decode(&payload)
+		if err != nil {
+			t.Fatalf("failed to decode callback payload: %v", err)
+		}
+
+		callbackCh <- payload
+
+		w.WriteHeader(http.StatusOK)
+	})
+
+	server := httptest.NewTLSServer(mux)
+	defer server.Close()
+
+	retrier, err := again.NewRetrier(
+		context.Background(),
+		again.WithMaxRetries(3),
+		again.WithInterval(1*time.Millisecond),
+		again.WithJitter(1*time.Millisecond),
+		again.WithTimeout(schedulerTimeout),
+	)
+	if err != nil {
+		t.Fatalf("failed to create retrier: %v", err)
+	}
+
+	sched := scheduler.NewScheduler(
+		scheduler.WithHTTPClient(server.Client()),
+		scheduler.WithURLValidator(newTestURLValidator(t)),
+	)
+	defer sched.Stop()
+
+	_, err = sched.Schedule(scheduler.Job{
+		Schedule: scheduler.Schedule{
+			Every:   10 * time.Millisecond,
+			MaxRuns: 1,
+		},
+		Request: scheduler.Request{
+			Method: http.MethodGet,
+			URL:    server.URL + targetPath,
+		},
+		Callback: scheduler.Callback{
+			URL: server.URL + callbackPath,
+		},
+		RetryPolicy: scheduler.RetryPolicy{
+			Retrier:          retrier,
+			RetryStatusCodes: []int{http.StatusInternalServerError},
+		},
+	})
+	if err != nil {
+		t.Fatalf(scheduleJobError, err)
+	}
+
+	select {
+	case payload := <-callbackCh:
+		if payload.Success {
+			t.Fatal("expected failure for non-retryable status")
+		}
+
+		if payload.Attempts != 1 {
+			t.Fatalf("expected 1 attempt, got %d", payload.Attempts)
+		}
+
+		if payload.StatusCode != http.StatusBadRequest {
+			t.Fatalf("expected status %d, got %d", http.StatusBadRequest, payload.StatusCode)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for callback")
+	}
+}
+
 func TestSchedulerCallbackBodyLimit(t *testing.T) {
 	t.Parallel()
 
@@ -245,7 +507,7 @@ func TestSchedulerCallbackBodyLimit(t *testing.T) {
 	callbackCh := make(chan scheduler.CallbackPayload, 1)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/target", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc(targetPath, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 
 		_, err := w.Write([]byte(body))
@@ -254,7 +516,7 @@ func TestSchedulerCallbackBodyLimit(t *testing.T) {
 		}
 	})
 
-	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(callbackPath, func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			err := r.Body.Close()
 			if err != nil {
@@ -290,15 +552,15 @@ func TestSchedulerCallbackBodyLimit(t *testing.T) {
 		},
 		Request: scheduler.Request{
 			Method: http.MethodGet,
-			URL:    server.URL + "/target",
+			URL:    server.URL + targetPath,
 		},
 		Callback: scheduler.Callback{
-			URL:          server.URL + "/callback",
+			URL:          server.URL + callbackPath,
 			MaxBodyBytes: 4,
 		},
 	})
 	if err != nil {
-		t.Fatalf("failed to schedule job: %v", err)
+		t.Fatalf(scheduleJobError, err)
 	}
 
 	select {
