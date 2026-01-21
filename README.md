@@ -215,6 +215,31 @@ func main() {
 }
 ```
 
+Supported methods for request and callback: `GET`, `POST`, `PUT`. If the callback URL is empty, no callback is sent.
+
+#### Scheduler Options
+
+- `WithHTTPClient` uses a custom HTTP client for requests and callbacks.
+- `WithLogger` sets the `slog.Logger` used for scheduler warnings.
+- `WithConcurrency` limits concurrent executions.
+
+#### Schedule Fields
+
+- `Every` is required.
+- `StartAt` and `EndAt` are optional time bounds.
+- `MaxRuns` caps the number of scheduled executions when > 0.
+
+#### Retry Policy
+
+- `RetryStatusCodes` marks response codes as retryable.
+- `TemporaryErrors` adds retryable error types.
+- If `Retrier` is nil, a default retrier is created and registry defaults are loaded.
+
+#### Callback Payload
+
+- Fields: `job_id`, `scheduled_at`, `started_at`, `finished_at`, `attempts`, `success`, `status_code`, `error`, `response_body`.
+- `response_body` is limited by `Callback.MaxBodyBytes` (defaults to 4096).
+
 ## License
 
 The code and documentation in this project are released under Mozilla Public License 2.0.
@@ -225,5 +250,3 @@ I'm a surfer, a crypto trader, and a software architect with 15 years of experie
 
 [build-link]: https://github.com/hyp3rd/go-again/actions/workflows/go.yml
 [codeql-link]: https://github.com/hyp3rd/go-again/actions/workflows/codeql.yml
-
-[codacy-security-scan-link]:

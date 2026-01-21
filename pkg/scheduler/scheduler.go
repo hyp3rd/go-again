@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -408,8 +409,11 @@ func (*Scheduler) buildTemporaryErrors(retrier *again.Retrier, policy RetryPolic
 func (*Scheduler) readBody(body io.ReadCloser, include bool, limit int) ([]byte, error) {
 	if !include {
 		_, err := io.Copy(io.Discard, body)
+		if err != nil {
+			return nil, ewrap.Wrap(err, "draining body failed")
+		}
 
-		return nil, ewrap.Wrap(err, "draining body failed")
+		return nil, nil
 	}
 
 	if limit <= 0 {
@@ -440,6 +444,10 @@ func (s *Scheduler) logError(msg string, err error) {
 		return
 	}
 
+	if isNilError(err) {
+		return
+	}
+
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		s.logger.Log(s.ctx, slog.LevelDebug, msg, slog.Any("error", err))
 
@@ -451,6 +459,21 @@ func (s *Scheduler) logError(msg string, err error) {
 
 func isRetryableStatus(code int, statuses []int) bool {
 	return slices.Contains(statuses, code)
+}
+
+func isNilError(err error) bool {
+	if err == nil {
+		return true
+	}
+
+	value := reflect.ValueOf(err)
+	//nolint:exhaustive // only need to check for nil-able kinds
+	switch value.Kind() {
+	case reflect.Pointer, reflect.Interface, reflect.Func, reflect.Map, reflect.Slice, reflect.Chan:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 func isSupportedMethod(method string) bool {
