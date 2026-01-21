@@ -11,7 +11,10 @@ import (
 	"github.com/hyp3rd/go-again"
 )
 
-const errFailedToCreateRetrier = "failed to create retrier: %v"
+const (
+	errFailedToCreateRetrier = "failed to create retrier: %v"
+	defaultRegistryLen       = 5
+)
 
 func TestRegistry(t *testing.T) {
 	t.Parallel()
@@ -29,7 +32,7 @@ func TestRegistry(t *testing.T) {
 
 	// Test listing all temporary errors.
 	tempErrors := registry.ListTemporaryErrors()
-	assert.GreaterOrEqual(t, len(tempErrors), 5)
+	assert.GreaterOrEqual(t, len(tempErrors), defaultRegistryLen)
 
 	// Test cleaning the registry.
 	registry.Clean()

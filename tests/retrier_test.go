@@ -18,6 +18,10 @@ var errTemporary = ewrap.New("temporary error")
 const (
 	errRetryCountMismatch = "retry did not retry the function the expected number of times. Got: %d, Expecting: %d"
 	errNonTemporary       = "non-temporary error"
+	defaultBackoffFactor  = 3
+	defaultRetryCount     = 3
+	defaultMaxRetries     = 5
+	defaultInterval       = 500 * time.Millisecond
 )
 
 func TestNewRetrier(t *testing.T) {
@@ -29,8 +33,8 @@ func TestNewRetrier(t *testing.T) {
 	}
 
 	// Test default values.
-	if retrier.MaxRetries != 5 {
-		t.Errorf("unexpected value for MaxRetries: got %d, want %d", retrier.MaxRetries, 5)
+	if retrier.MaxRetries != defaultMaxRetries {
+		t.Errorf("unexpected value for MaxRetries: got %d, want %d", retrier.MaxRetries, defaultMaxRetries)
 	}
 
 	if retrier.Jitter != 1*time.Second {
@@ -41,8 +45,8 @@ func TestNewRetrier(t *testing.T) {
 		t.Errorf("unexpected value for BackoffFactor: got %v, want %v", retrier.BackoffFactor, 2)
 	}
 
-	if retrier.Interval != 500*time.Millisecond {
-		t.Errorf("unexpected value for Interval: got %v, want %v", retrier.Interval, 500*time.Millisecond)
+	if retrier.Interval != defaultInterval {
+		t.Errorf("unexpected value for Interval: got %v, want %v", retrier.Interval, defaultInterval)
 	}
 
 	if retrier.Timeout != 20*time.Second {
@@ -58,7 +62,7 @@ func TestNewRetrier(t *testing.T) {
 		context.Background(),
 		again.WithMaxRetries(10),
 		again.WithJitter(2*time.Second),
-		again.WithBackoffFactor(3),
+		again.WithBackoffFactor(defaultBackoffFactor),
 		again.WithInterval(1*time.Second),
 		again.WithTimeout(30*time.Second),
 	)
@@ -74,8 +78,8 @@ func TestNewRetrier(t *testing.T) {
 		t.Errorf("unexpected value for Jitter: got %v, want %v", retrier.Jitter, 2*time.Second)
 	}
 
-	if retrier.BackoffFactor != 3 {
-		t.Errorf("unexpected value for BackoffFactor: got %v, want %v", retrier.BackoffFactor, 3)
+	if retrier.BackoffFactor != defaultBackoffFactor {
+		t.Errorf("unexpected value for BackoffFactor: got %v, want %v", retrier.BackoffFactor, defaultBackoffFactor)
 	}
 
 	if retrier.Interval != 1*time.Second {
@@ -103,7 +107,7 @@ func TestRetrier_Validate(t *testing.T) {
 		MaxRetries:    5,
 		Jitter:        1 * time.Second,
 		BackoffFactor: 2,
-		Interval:      500 * time.Millisecond,
+		Interval:      defaultInterval,
 		Timeout:       20 * time.Second,
 	}
 
@@ -117,7 +121,7 @@ func TestRetrier_Validate(t *testing.T) {
 		MaxRetries:    0,
 		Jitter:        1 * time.Second,
 		BackoffFactor: 2,
-		Interval:      500 * time.Millisecond,
+		Interval:      defaultInterval,
 		Timeout:       20 * time.Second,
 	}
 
@@ -410,7 +414,7 @@ func TestWithoutRegistry(t *testing.T) {
 
 	errs := retrier.Do(context.TODO(), func() error {
 		retryCount++
-		if retryCount < 3 {
+		if retryCount < defaultRetryCount {
 			return http.ErrAbortHandler
 		}
 
@@ -421,8 +425,8 @@ func TestWithoutRegistry(t *testing.T) {
 		t.Errorf("retry returned an unexpected error: %v", errs.Last)
 	}
 
-	if retryCount != 3 {
-		t.Errorf(errRetryCountMismatch, retryCount, 3)
+	if retryCount != defaultRetryCount {
+		t.Errorf(errRetryCountMismatch, retryCount, defaultRetryCount)
 	}
 }
 
@@ -443,7 +447,7 @@ func TestRetryWithDefaults(t *testing.T) {
 
 	errs := retrier.Do(context.TODO(), func() error {
 		retryCount++
-		if retryCount < 3 {
+		if retryCount < defaultRetryCount {
 			return http.ErrHandlerTimeout
 		}
 
@@ -475,7 +479,7 @@ func TestRetryWithDefaultsWithoutList(t *testing.T) {
 
 	errs := retrier.Do(context.TODO(), func() error {
 		retryCount++
-		if retryCount < 3 {
+		if retryCount < defaultRetryCount {
 			return http.ErrHandlerTimeout
 		}
 
@@ -486,8 +490,8 @@ func TestRetryWithDefaultsWithoutList(t *testing.T) {
 		t.Errorf("retry returned an unexpected error: %v", errs.Last)
 	}
 
-	if retryCount != 3 {
-		t.Errorf(errRetryCountMismatch, retryCount, 3)
+	if retryCount != defaultRetryCount {
+		t.Errorf(errRetryCountMismatch, retryCount, defaultRetryCount)
 	}
 }
 
@@ -512,7 +516,7 @@ func TestRetryTimeout(t *testing.T) {
 
 	errs := retrier.Do(context.TODO(), func() error {
 		retryCount++
-		if retryCount < 3 {
+		if retryCount < defaultRetryCount {
 			time.Sleep(2 * time.Second)
 
 			return http.ErrAbortHandler
@@ -579,7 +583,7 @@ func TestRetryWithContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	errs := retrier.Do(ctx, func() error {
 		retryCount++
-		if retryCount < 3 {
+		if retryCount < defaultRetryCount {
 			time.Sleep(2 * time.Second)
 			cancel()
 
@@ -617,7 +621,7 @@ func TestRetryWithChannelCancel(t *testing.T) {
 
 	errs := retrier.Do(context.Background(), func() error {
 		retryCount++
-		if retryCount < 3 {
+		if retryCount < defaultRetryCount {
 			time.Sleep(2 * time.Second)
 			retrier.Cancel()
 
