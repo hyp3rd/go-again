@@ -3,6 +3,8 @@ package scheduler
 import (
 	"log/slog"
 	"net/http"
+
+	"github.com/hyp3rd/sectools/pkg/validate"
 )
 
 // Option configures the scheduler.
@@ -30,5 +32,13 @@ func WithConcurrency(n int) Option {
 		if n > 0 {
 			s.sem = make(chan struct{}, n)
 		}
+	}
+}
+
+// WithURLValidator sets the URL validator used for request and callback URLs.
+// Pass nil to disable URL validation.
+func WithURLValidator(validator *validate.URLValidator) Option {
+	return func(s *Scheduler) {
+		s.urlValidator = validator
 	}
 }

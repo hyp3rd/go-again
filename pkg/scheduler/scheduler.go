@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/hyp3rd/ewrap"
+	"github.com/hyp3rd/sectools/pkg/validate"
 
 	"github.com/hyp3rd/go-again"
 )
@@ -32,15 +34,16 @@ type jobEntry struct {
 
 // Scheduler coordinates scheduled jobs.
 type Scheduler struct {
-	mu      sync.Mutex
-	jobs    map[string]*jobEntry
-	client  *http.Client
-	logger  *slog.Logger
-	sem     chan struct{}
-	ctx     context.Context //nolint:containedctx // base context for scheduler lifecycle
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
-	counter uint64
+	mu           sync.Mutex
+	jobs         map[string]*jobEntry
+	client       *http.Client
+	logger       *slog.Logger
+	sem          chan struct{}
+	ctx          context.Context //nolint:containedctx // base context for scheduler lifecycle
+	cancel       context.CancelFunc
+	urlValidator *validate.URLValidator
+	wg           sync.WaitGroup
+	counter      uint64
 }
 
 // NewScheduler creates a scheduler with the provided options.
@@ -52,6 +55,11 @@ func NewScheduler(opts ...Option) *Scheduler {
 		logger: slog.Default(),
 		ctx:    ctx,
 		cancel: cancel,
+	}
+
+	validator, err := validate.NewURLValidator()
+	if err == nil {
+		schedulerInstance.urlValidator = validator
 	}
 
 	for _, opt := range opts {
@@ -131,58 +139,116 @@ func (s *Scheduler) nextID() string {
 	return fmt.Sprintf("job-%d", id)
 }
 
-func (*Scheduler) normalizeJob(job Job) (Job, error) {
-	if job.Schedule.Every <= 0 {
-		return Job{}, fmt.Errorf("%w: schedule interval must be > 0", ErrInvalidJob)
+func (s *Scheduler) normalizeJob(job Job) (Job, error) {
+	err := validateSchedule(job.Schedule)
+	if err != nil {
+		return Job{}, err
 	}
 
-	if job.Schedule.MaxRuns < 0 {
-		return Job{}, fmt.Errorf("%w: max runs must be >= 0", ErrInvalidJob)
+	request, err := s.normalizeRequest(job.Request)
+	if err != nil {
+		return Job{}, err
 	}
 
-	if !job.Schedule.EndAt.IsZero() && !job.Schedule.StartAt.IsZero() && job.Schedule.EndAt.Before(job.Schedule.StartAt) {
-		return Job{}, fmt.Errorf("%w: end time precedes start time", ErrInvalidJob)
+	job.Request = request
+
+	callback, err := s.normalizeCallback(job.Callback)
+	if err != nil {
+		return Job{}, err
 	}
 
-	if job.Request.URL == "" {
-		return Job{}, fmt.Errorf("%w: request URL is required", ErrInvalidJob)
-	}
+	job.Callback = callback
 
-	if job.Request.Method == "" {
-		job.Request.Method = http.MethodGet
-	}
-
-	job.Request.Method = strings.ToUpper(job.Request.Method)
-	if !isSupportedMethod(job.Request.Method) {
-		return Job{}, fmt.Errorf("%w: %s", ErrUnsupportedMethod, job.Request.Method)
-	}
-
-	if job.Callback.URL != "" {
-		if job.Callback.Method == "" {
-			job.Callback.Method = defaultCallbackMethod
-		}
-
-		job.Callback.Method = strings.ToUpper(job.Callback.Method)
-		if !isSupportedMethod(job.Callback.Method) {
-			return Job{}, fmt.Errorf("%w: %s", ErrUnsupportedMethod, job.Callback.Method)
-		}
-
-		if job.Callback.MaxBodyBytes <= 0 {
-			job.Callback.MaxBodyBytes = defaultCallbackMaxBodySize
-		}
-	}
-
-	if job.RetryPolicy.Retrier == nil {
-		retrier, err := again.NewRetrier(context.Background())
-		if err != nil {
-			return Job{}, fmt.Errorf("%w: %w", ErrInvalidJob, err)
-		}
-
-		retrier.Registry.LoadDefaults()
-		job.RetryPolicy.Retrier = retrier
+	err = ensureRetrier(&job)
+	if err != nil {
+		return Job{}, err
 	}
 
 	return job, nil
+}
+
+func validateSchedule(schedule Schedule) error {
+	if schedule.Every <= 0 {
+		return fmt.Errorf("%w: schedule interval must be > 0", ErrInvalidJob)
+	}
+
+	if schedule.MaxRuns < 0 {
+		return fmt.Errorf("%w: max runs must be >= 0", ErrInvalidJob)
+	}
+
+	if !schedule.EndAt.IsZero() && !schedule.StartAt.IsZero() && schedule.EndAt.Before(schedule.StartAt) {
+		return fmt.Errorf("%w: end time precedes start time", ErrInvalidJob)
+	}
+
+	return nil
+}
+
+func (s *Scheduler) normalizeRequest(request Request) (Request, error) {
+	if request.URL == "" {
+		return Request{}, fmt.Errorf("%w: request URL is required", ErrInvalidJob)
+	}
+
+	if request.Method == "" {
+		request.Method = http.MethodGet
+	}
+
+	request.Method = strings.ToUpper(request.Method)
+	if !isSupportedMethod(request.Method) {
+		return Request{}, fmt.Errorf("%w: %s", ErrUnsupportedMethod, request.Method)
+	}
+
+	if s.urlValidator != nil {
+		_, err := s.urlValidator.Validate(s.ctx, request.URL)
+		if err != nil {
+			return Request{}, fmt.Errorf("%w: request URL invalid: %w", ErrInvalidJob, err)
+		}
+	}
+
+	return request, nil
+}
+
+func (s *Scheduler) normalizeCallback(callback Callback) (Callback, error) {
+	if callback.URL == "" {
+		return callback, nil
+	}
+
+	if callback.Method == "" {
+		callback.Method = defaultCallbackMethod
+	}
+
+	callback.Method = strings.ToUpper(callback.Method)
+	if !isSupportedMethod(callback.Method) {
+		return Callback{}, fmt.Errorf("%w: %s", ErrUnsupportedMethod, callback.Method)
+	}
+
+	if s.urlValidator != nil {
+		_, err := s.urlValidator.Validate(s.ctx, callback.URL)
+		if err != nil {
+			return Callback{}, fmt.Errorf("%w: callback URL invalid: %w", ErrInvalidJob, err)
+		}
+	}
+
+	if callback.MaxBodyBytes <= 0 {
+		callback.MaxBodyBytes = defaultCallbackMaxBodySize
+	}
+
+	return callback, nil
+}
+
+func ensureRetrier(job *Job) error {
+	if job.RetryPolicy.Retrier != nil {
+		return nil
+	}
+
+	retrier, err := again.NewRetrier(context.Background())
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidJob, err)
+	}
+
+	retrier.Registry.LoadDefaults()
+	job.RetryPolicy.Retrier = retrier
+
+	return nil
 }
 
 func (s *Scheduler) runJob(ctx context.Context, job Job) {
@@ -408,8 +474,11 @@ func (*Scheduler) buildTemporaryErrors(retrier *again.Retrier, policy RetryPolic
 func (*Scheduler) readBody(body io.ReadCloser, include bool, limit int) ([]byte, error) {
 	if !include {
 		_, err := io.Copy(io.Discard, body)
+		if err != nil {
+			return nil, ewrap.Wrap(err, "draining body failed")
+		}
 
-		return nil, ewrap.Wrap(err, "draining body failed")
+		return nil, nil
 	}
 
 	if limit <= 0 {
@@ -440,6 +509,10 @@ func (s *Scheduler) logError(msg string, err error) {
 		return
 	}
 
+	if isNilError(err) {
+		return
+	}
+
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		s.logger.Log(s.ctx, slog.LevelDebug, msg, slog.Any("error", err))
 
@@ -451,6 +524,21 @@ func (s *Scheduler) logError(msg string, err error) {
 
 func isRetryableStatus(code int, statuses []int) bool {
 	return slices.Contains(statuses, code)
+}
+
+func isNilError(err error) bool {
+	if err == nil {
+		return true
+	}
+
+	value := reflect.ValueOf(err)
+	//nolint:exhaustive // only need to check for nil-able kinds
+	switch value.Kind() {
+	case reflect.Pointer, reflect.Interface, reflect.Func, reflect.Map, reflect.Slice, reflect.Chan:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 func isSupportedMethod(method string) bool {

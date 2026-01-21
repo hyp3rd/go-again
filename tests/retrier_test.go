@@ -104,7 +104,7 @@ func TestRetrier_Validate(t *testing.T) {
 
 	// Test valid Retrier.
 	retrier := &again.Retrier{
-		MaxRetries:    5,
+		MaxRetries:    defaultMaxRetries,
 		Jitter:        1 * time.Second,
 		BackoffFactor: 2,
 		Interval:      defaultInterval,
@@ -146,7 +146,7 @@ func TestRetrier_Validate(t *testing.T) {
 
 	// Test invalid BackoffFactor.
 	retrier = &again.Retrier{
-		MaxRetries:    5,
+		MaxRetries:    defaultMaxRetries,
 		Jitter:        1 * time.Second,
 		BackoffFactor: 1,
 		Interval:      1 * time.Second,
@@ -160,7 +160,7 @@ func TestRetrier_Validate(t *testing.T) {
 
 	// Test invalid Interval and Timeout.
 	retrier = &again.Retrier{
-		MaxRetries:    5,
+		MaxRetries:    defaultMaxRetries,
 		Jitter:        1 * time.Second,
 		BackoffFactor: 2,
 		Interval:      10 * time.Second,
@@ -174,7 +174,7 @@ func TestRetrier_Validate(t *testing.T) {
 
 	// Test invalid Interval * MaxRetries.
 	retrier = &again.Retrier{
-		MaxRetries:    5,
+		MaxRetries:    defaultMaxRetries,
 		Jitter:        1 * time.Second,
 		BackoffFactor: 2,
 		Interval:      1 * time.Second,
@@ -458,8 +458,8 @@ func TestRetryWithDefaults(t *testing.T) {
 		t.Errorf("retry returned an unexpected error: %v", errs.Last)
 	}
 
-	if retryCount != 3 {
-		t.Errorf(errRetryCountMismatch, retryCount, 3)
+	if retryCount != defaultRetryCount {
+		t.Errorf(errRetryCountMismatch, retryCount, defaultRetryCount)
 	}
 }
 
@@ -504,7 +504,7 @@ func TestRetryTimeout(t *testing.T) {
 		context.Background(),
 		again.WithTimeout(1*time.Second),
 		again.WithInterval(100*time.Millisecond),
-		again.WithMaxRetries(3),
+		again.WithMaxRetries(defaultRetryCount),
 	)
 	if err != nil {
 		t.Fatalf(errFailedToCreateRetrier, err)
@@ -653,14 +653,14 @@ func BenchmarkRetry(b *testing.B) {
 
 	fn := func() error {
 		retryCount++
-		if retryCount < 5 {
+		if retryCount < defaultMaxRetries {
 			return tempErr
 		}
 
 		return nil
 	}
 
-	retryCount = 5
+	retryCount = defaultMaxRetries
 
 	for b.Loop() {
 		retrier.Do(context.TODO(), fn, tempErr)
@@ -670,7 +670,7 @@ func BenchmarkRetry(b *testing.B) {
 func BenchmarkRetryWithRetries(b *testing.B) {
 	retrier, err := again.NewRetrier(
 		context.Background(),
-		again.WithMaxRetries(5),
+		again.WithMaxRetries(defaultMaxRetries),
 		again.WithInterval(1*time.Microsecond),
 		again.WithJitter(1*time.Microsecond),
 		again.WithTimeout(50*time.Millisecond),
@@ -686,7 +686,7 @@ func BenchmarkRetryWithRetries(b *testing.B) {
 
 	fn := func() error {
 		retryCount++
-		if retryCount < 5 {
+		if retryCount < defaultMaxRetries {
 			return tempErr
 		}
 
