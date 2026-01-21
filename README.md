@@ -169,7 +169,9 @@ func main() {
 
 ### Scheduler
 
-The scheduler runs HTTP requests on an interval and posts results to a callback URL.
+The scheduler runs HTTP requests on an interval and posts results to a callback URL. Request and callback URLs are
+validated with `sectools` (HTTPS only, no userinfo, and no private/localhost hosts by default). To customize or disable
+validation, pass `WithURLValidator` (use `nil` to disable validation).
 
 ```go
 package main
@@ -222,6 +224,7 @@ Supported methods for request and callback: `GET`, `POST`, `PUT`. If the callbac
 - `WithHTTPClient` uses a custom HTTP client for requests and callbacks.
 - `WithLogger` sets the `slog.Logger` used for scheduler warnings.
 - `WithConcurrency` limits concurrent executions.
+- `WithURLValidator` sets the URL validator (pass `nil` to disable).
 
 #### Schedule Fields
 

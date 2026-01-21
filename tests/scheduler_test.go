@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hyp3rd/sectools/pkg/validate"
+
 	"github.com/hyp3rd/go-again"
 	"github.com/hyp3rd/go-again/pkg/scheduler"
 )
@@ -26,7 +28,10 @@ func TestSchedulerRetryAndCallback(t *testing.T) {
 
 	var targetHits int32
 
-	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	callbackCh := make(chan scheduler.CallbackPayload, 1)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/target", func(w http.ResponseWriter, _ *http.Request) {
 		hit := atomic.AddInt32(&targetHits, 1)
 		if hit < 3 {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -45,12 +50,9 @@ func TestSchedulerRetryAndCallback(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to write response: %v", err)
 		}
-	}))
-	defer target.Close()
+	})
 
-	callbackCh := make(chan scheduler.CallbackPayload, 1)
-
-	callback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			err := r.Body.Close()
 			if err != nil {
@@ -68,8 +70,10 @@ func TestSchedulerRetryAndCallback(t *testing.T) {
 		callbackCh <- payload
 
 		w.WriteHeader(http.StatusOK)
-	}))
-	defer callback.Close()
+	})
+
+	server := httptest.NewTLSServer(mux)
+	defer server.Close()
 
 	retrier, err := again.NewRetrier(
 		context.Background(),
@@ -82,7 +86,10 @@ func TestSchedulerRetryAndCallback(t *testing.T) {
 		t.Fatalf("failed to create retrier: %v", err)
 	}
 
-	sched := scheduler.NewScheduler()
+	sched := scheduler.NewScheduler(
+		scheduler.WithHTTPClient(server.Client()),
+		scheduler.WithURLValidator(newTestURLValidator(t)),
+	)
 	defer sched.Stop()
 
 	job := scheduler.Job{
@@ -92,10 +99,10 @@ func TestSchedulerRetryAndCallback(t *testing.T) {
 		},
 		Request: scheduler.Request{
 			Method: http.MethodGet,
-			URL:    target.URL,
+			URL:    server.URL + "/target",
 		},
 		Callback: scheduler.Callback{
-			URL: callback.URL,
+			URL: server.URL + "/callback",
 		},
 		RetryPolicy: scheduler.RetryPolicy{
 			Retrier:          retrier,
@@ -142,7 +149,7 @@ func TestSchedulerValidation(t *testing.T) {
 		},
 		Request: scheduler.Request{
 			Method: http.MethodDelete,
-			URL:    "http://example.com",
+			URL:    "https://example.com",
 		},
 	})
 	if err == nil || !errors.Is(err, scheduler.ErrUnsupportedMethod) {
@@ -162,22 +169,43 @@ func TestSchedulerValidation(t *testing.T) {
 	}
 }
 
+func newTestURLValidator(t *testing.T) *validate.URLValidator {
+	t.Helper()
+
+	validator, err := validate.NewURLValidator(
+		validate.WithURLAllowIPLiteral(true),
+		validate.WithURLAllowPrivateIP(true),
+		validate.WithURLAllowLocalhost(true),
+	)
+	if err != nil {
+		t.Fatalf("failed to create url validator: %v", err)
+	}
+
+	return validator
+}
+
 func TestSchedulerMaxRunsStops(t *testing.T) {
 	t.Parallel()
 
 	hitCh := make(chan struct{}, schedulerRetries)
 
-	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/target", func(w http.ResponseWriter, _ *http.Request) {
 		select {
 		case hitCh <- struct{}{}:
 		default:
 		}
 
 		w.WriteHeader(http.StatusOK)
-	}))
-	defer target.Close()
+	})
 
-	sched := scheduler.NewScheduler()
+	server := httptest.NewTLSServer(mux)
+	defer server.Close()
+
+	sched := scheduler.NewScheduler(
+		scheduler.WithHTTPClient(server.Client()),
+		scheduler.WithURLValidator(newTestURLValidator(t)),
+	)
 	defer sched.Stop()
 
 	_, err := sched.Schedule(scheduler.Job{
@@ -187,7 +215,7 @@ func TestSchedulerMaxRunsStops(t *testing.T) {
 		},
 		Request: scheduler.Request{
 			Method: http.MethodGet,
-			URL:    target.URL,
+			URL:    server.URL + "/target",
 		},
 	})
 	if err != nil {
@@ -214,19 +242,19 @@ func TestSchedulerCallbackBodyLimit(t *testing.T) {
 
 	body := strings.Repeat("x", 10)
 
-	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	callbackCh := make(chan scheduler.CallbackPayload, 1)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/target", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 
 		_, err := w.Write([]byte(body))
 		if err != nil {
 			t.Fatalf("failed to write response: %v", err)
 		}
-	}))
-	defer target.Close()
+	})
 
-	callbackCh := make(chan scheduler.CallbackPayload, 1)
-
-	callback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			err := r.Body.Close()
 			if err != nil {
@@ -244,10 +272,15 @@ func TestSchedulerCallbackBodyLimit(t *testing.T) {
 		callbackCh <- payload
 
 		w.WriteHeader(http.StatusOK)
-	}))
-	defer callback.Close()
+	})
 
-	sched := scheduler.NewScheduler()
+	server := httptest.NewTLSServer(mux)
+	defer server.Close()
+
+	sched := scheduler.NewScheduler(
+		scheduler.WithHTTPClient(server.Client()),
+		scheduler.WithURLValidator(newTestURLValidator(t)),
+	)
 	defer sched.Stop()
 
 	_, err := sched.Schedule(scheduler.Job{
@@ -257,10 +290,10 @@ func TestSchedulerCallbackBodyLimit(t *testing.T) {
 		},
 		Request: scheduler.Request{
 			Method: http.MethodGet,
-			URL:    target.URL,
+			URL:    server.URL + "/target",
 		},
 		Callback: scheduler.Callback{
-			URL:          callback.URL,
+			URL:          server.URL + "/callback",
 			MaxBodyBytes: 4,
 		},
 	})
