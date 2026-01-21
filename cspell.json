@@ -114,6 +114,7 @@
     "randv",
     "recvcheck",
     "Retryable",
+    "sched",
     "securego",
     "shellcheck",
     "sigstore",

@@ -7,10 +7,12 @@ import (
 	"github.com/hyp3rd/go-again"
 )
 
+const defaultPoolSize = 5
+
 func TestTimerPool(t *testing.T) {
 	t.Parallel()
 
-	poolSize := 5
+	poolSize := defaultPoolSize
 	timeout := time.Second
 
 	// Create a new timer pool.
@@ -70,7 +72,7 @@ func TestTimerPool(t *testing.T) {
 func TestTimerPool_PutClosed(t *testing.T) {
 	t.Parallel()
 
-	poolSize := 5
+	poolSize := defaultPoolSize
 	timeout := time.Second
 
 	// Create a new timer pool.

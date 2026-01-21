@@ -167,6 +167,54 @@ func main() {
 }
 ```
 
+### Scheduler
+
+The scheduler runs HTTP requests on an interval and posts results to a callback URL.
+
+```go
+package main
+
+import (
+    "context"
+    "net/http"
+    "time"
+
+    "github.com/hyp3rd/go-again"
+    "github.com/hyp3rd/go-again/pkg/scheduler"
+)
+
+func main() {
+    retrier, _ := again.NewRetrier(
+        context.Background(),
+        again.WithMaxRetries(5),
+        again.WithInterval(10*time.Millisecond),
+        again.WithJitter(10*time.Millisecond),
+        again.WithTimeout(5*time.Second),
+    )
+
+    s := scheduler.NewScheduler()
+    defer s.Stop()
+
+    _, _ = s.Schedule(scheduler.Job{
+        Schedule: scheduler.Schedule{
+            Every:   1 * time.Minute,
+            MaxRuns: 1,
+        },
+        Request: scheduler.Request{
+            Method: http.MethodPost,
+            URL:    "https://example.com/endpoint",
+        },
+        Callback: scheduler.Callback{
+            URL: "https://example.com/callback",
+        },
+        RetryPolicy: scheduler.RetryPolicy{
+            Retrier:          retrier,
+            RetryStatusCodes: []int{http.StatusTooManyRequests, http.StatusInternalServerError},
+        },
+    })
+}
+```
+
 ## License
 
 The code and documentation in this project are released under Mozilla Public License 2.0.

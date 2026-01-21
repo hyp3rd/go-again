@@ -140,6 +140,10 @@ linters:
         - name: add-constant
           severity: warning
           disabled: false
+          exclude:
+            - "./tests/retrier_test.go"
+            - "./tests/*.go"
+            - "tests/*"
           arguments:
             - max-lit-count: "3"
               allow-strs: '"","-","key"'
