@@ -1,4 +1,4 @@
-# PRD: go-again Retrier Hardening
+# PRD: go-again Retrier Hardening + Scheduler Extension
 
 ## Context
 
@@ -97,9 +97,68 @@
 
 ## Dependencies
 
-- Go toolchain (module `go.mod`), `github.com/hyp3rd/ewrap`.
+- Go toolchain (module `go.mod`), `github.com/hyp3rd/ewrap`, `github.com/hyp3rd/sectools`.
 
 ## Rollout
 
 - Cut a patch release after tests pass.
 - Add brief release notes covering retry correctness and documentation fixes.
+
+## Scheduler Extension
+
+### Context (Scheduler Extension)
+
+`go-again` now includes a lightweight scheduler for recurring HTTP requests with retry support and optional callbacks.
+
+### Goals (Scheduler Extension)
+
+- Schedule HTTP requests on an interval with optional `StartAt`, `EndAt`, and `MaxRuns`.
+- Post execution results to an optional callback URL with a bounded response body.
+- Reuse the retrier for retryable status codes and error classes.
+- Validate request and callback URLs by default, with the ability to customize or disable validation.
+- Support custom HTTP clients, concurrency limits, and logging hooks.
+
+### Non-Goals (Scheduler Extension)
+
+- Persistent schedule storage or distributed coordination.
+- Cron expression support.
+- Non-HTTP protocols or gRPC endpoints.
+
+### Requirements (Scheduler Extension)
+
+#### Functional (Scheduler Extension)
+
+- Support `GET`, `POST`, `PUT` for requests and callbacks.
+- Validate URLs with sectools defaults (HTTPS only, no userinfo, no private/localhost).
+- Provide `WithURLValidator` to override or disable validation.
+- Allow retries via `RetryPolicy` (`Retrier`, `TemporaryErrors`, `RetryStatusCodes`).
+- Skip callbacks when `Callback.URL` is empty.
+
+#### Non-Functional (Scheduler Extension)
+
+- Concurrency-safe scheduling and execution.
+- Avoid global mutable state; keep overhead minimal.
+
+### Acceptance Criteria (Scheduler Extension)
+
+- Schedules respect `StartAt`, `EndAt`, and `MaxRuns`.
+- Retry stops on success; non-retryable statuses stop immediately.
+- Callback payload includes attempts, status, error, and bounded response body.
+- URL validation is enforced by default and can be disabled.
+
+### Test Plan (Scheduler Extension)
+
+- Retry and callback flow is covered with TLS endpoints.
+- Validation rejects non-HTTPS URLs; disabling validation allows HTTP.
+- `EndAt` in the past skips execution.
+- `Remove` cancels pending jobs before execution.
+- Non-retryable status returns after one attempt.
+
+### Decisions (Scheduler Extension)
+
+- Use sectools URL validation by default.
+- Allow callers to provide a custom validator or disable validation with `nil`.
+
+### Status (Scheduler Extension)
+
+- Tests and race checks are reported green with no behavioral changes.
