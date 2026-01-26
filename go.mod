@@ -4,7 +4,7 @@ go 1.25.6
 
 require (
 	github.com/hyp3rd/ewrap v1.3.7
-	github.com/hyp3rd/sectools v1.1.9
+	github.com/hyp3rd/sectools v1.2.1
 	github.com/stretchr/testify v1.11.1
 )
 
