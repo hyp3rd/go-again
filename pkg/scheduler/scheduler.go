@@ -198,10 +198,12 @@ func (s *Scheduler) normalizeRequest(request Request) (Request, error) {
 	}
 
 	if s.urlValidator != nil {
-		_, err := s.urlValidator.Validate(s.ctx, request.URL)
+		result, err := s.urlValidator.Validate(s.ctx, request.URL)
 		if err != nil {
 			return Request{}, fmt.Errorf("%w: request URL invalid: %w", ErrInvalidJob, err)
 		}
+
+		request.URL = result.NormalizedURL
 	}
 
 	return request, nil
@@ -222,10 +224,12 @@ func (s *Scheduler) normalizeCallback(callback Callback) (Callback, error) {
 	}
 
 	if s.urlValidator != nil {
-		_, err := s.urlValidator.Validate(s.ctx, callback.URL)
+		result, err := s.urlValidator.Validate(s.ctx, callback.URL)
 		if err != nil {
 			return Callback{}, fmt.Errorf("%w: callback URL invalid: %w", ErrInvalidJob, err)
 		}
+
+		callback.URL = result.NormalizedURL
 	}
 
 	if callback.MaxBodyBytes <= 0 {
@@ -349,6 +353,7 @@ func (s *Scheduler) execute(ctx context.Context, job Job, scheduledAt time.Time)
 			req.Header.Set(key, value)
 		}
 
+		//nolint:gosec // G704 false positive: job request URL is validated/normalized in normalizeRequest before scheduling.
 		resp, err := s.client.Do(req)
 		if err != nil {
 			return ewrap.Wrap(err, "request failed")
@@ -433,6 +438,7 @@ func (s *Scheduler) sendCallback(ctx context.Context, job Job, payload CallbackP
 		req.Header.Set(key, value)
 	}
 
+	//nolint:gosec // G704 false positive: callback URL is validated/normalized in normalizeCallback before scheduling.
 	resp, err := s.client.Do(req)
 	if err != nil {
 		s.logError("callback send failed", err)

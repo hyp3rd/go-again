@@ -18,14 +18,17 @@ import (
 )
 
 const (
-	schedulerTimeout = 200 * time.Millisecond
-	schedulerRetries = 5
-	targetPath       = "/target"
-	callbackPath     = "/callback"
-	scheduleJobError = "failed to schedule job: %v"
+	schedulerTimeout             = 200 * time.Millisecond
+	schedulerRetries             = 5
+	schedulerCallbackWaitTimeout = 2 * time.Second
+	retryAndCallbackAttempts     = 3
+	nonRetryableStatusMaxRetries = 3
+	callbackBodyLimitMaxBytes    = 4
+	targetPath                   = "/target"
+	callbackPath                 = "/callback"
+	scheduleJobError             = "failed to schedule job: %v"
 )
 
-//nolint:funlen
 func TestSchedulerRetryAndCallback(t *testing.T) {
 	t.Parallel()
 
@@ -34,66 +37,14 @@ func TestSchedulerRetryAndCallback(t *testing.T) {
 	callbackCh := make(chan scheduler.CallbackPayload, 1)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc(targetPath, func(w http.ResponseWriter, _ *http.Request) {
-		hit := atomic.AddInt32(&targetHits, 1)
-		if hit < 3 {
-			w.WriteHeader(http.StatusInternalServerError)
-
-			_, err := w.Write([]byte("retry"))
-			if err != nil {
-				t.Fatalf("failed to write response: %v", err)
-			}
-
-			return
-		}
-
-		w.WriteHeader(http.StatusOK)
-
-		_, err := w.Write([]byte("ok"))
-		if err != nil {
-			t.Fatalf("failed to write response: %v", err)
-		}
-	})
-
-	mux.HandleFunc(callbackPath, func(w http.ResponseWriter, r *http.Request) {
-		defer func() {
-			err := r.Body.Close()
-			if err != nil {
-				t.Logf("failed to close request body: %v", err)
-			}
-		}()
-
-		var payload scheduler.CallbackPayload
-
-		err := json.NewDecoder(r.Body).Decode(&payload)
-		if err != nil {
-			t.Fatalf("failed to decode callback payload: %v", err)
-		}
-
-		callbackCh <- payload
-
-		w.WriteHeader(http.StatusOK)
-	})
+	mux.HandleFunc(targetPath, newRetryThenSuccessHandler(t, &targetHits, retryAndCallbackAttempts))
+	mux.HandleFunc(callbackPath, newCallbackPayloadHandler(t, callbackCh))
 
 	server := httptest.NewTLSServer(mux)
 	defer server.Close()
 
-	retrier, err := again.NewRetrier(
-		context.Background(),
-		again.WithMaxRetries(schedulerRetries),
-		again.WithInterval(1*time.Millisecond),
-		again.WithJitter(1*time.Millisecond),
-		again.WithTimeout(schedulerTimeout),
-	)
-	if err != nil {
-		t.Fatalf("failed to create retrier: %v", err)
-	}
-
-	sched := scheduler.NewScheduler(
-		scheduler.WithHTTPClient(server.Client()),
-		scheduler.WithURLValidator(newTestURLValidator(t)),
-	)
-	defer sched.Stop()
+	retrier := newSchedulerTestRetrier(t, schedulerRetries)
+	sched := newTLSTestScheduler(t, server)
 
 	job := scheduler.Job{
 		Schedule: scheduler.Schedule{
@@ -118,26 +69,8 @@ func TestSchedulerRetryAndCallback(t *testing.T) {
 		t.Fatalf(scheduleJobError, err)
 	}
 
-	select {
-	case payload := <-callbackCh:
-		if payload.JobID != jobID {
-			t.Fatalf("expected job id %q, got %q", jobID, payload.JobID)
-		}
-
-		if !payload.Success {
-			t.Fatalf("expected success, got error %q", payload.Error)
-		}
-
-		if payload.Attempts != 3 {
-			t.Fatalf("expected 3 attempts, got %d", payload.Attempts)
-		}
-
-		if payload.StatusCode != http.StatusOK {
-			t.Fatalf("expected status %d, got %d", http.StatusOK, payload.StatusCode)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for callback")
-	}
+	payload := waitForCallbackPayload(t, callbackCh)
+	assertSuccessfulRetryCallbackPayload(t, payload, jobID)
 }
 
 func TestSchedulerValidation(t *testing.T) {
@@ -420,47 +353,15 @@ func TestSchedulerNonRetryableStatus(t *testing.T) {
 		w.WriteHeader(http.StatusBadRequest)
 	})
 
-	mux.HandleFunc(callbackPath, func(w http.ResponseWriter, r *http.Request) {
-		defer func() {
-			err := r.Body.Close()
-			if err != nil {
-				t.Logf("failed to close request body: %v", err)
-			}
-		}()
-
-		var payload scheduler.CallbackPayload
-
-		err := json.NewDecoder(r.Body).Decode(&payload)
-		if err != nil {
-			t.Fatalf("failed to decode callback payload: %v", err)
-		}
-
-		callbackCh <- payload
-
-		w.WriteHeader(http.StatusOK)
-	})
+	mux.HandleFunc(callbackPath, newCallbackPayloadHandler(t, callbackCh))
 
 	server := httptest.NewTLSServer(mux)
 	defer server.Close()
 
-	retrier, err := again.NewRetrier(
-		context.Background(),
-		again.WithMaxRetries(3),
-		again.WithInterval(1*time.Millisecond),
-		again.WithJitter(1*time.Millisecond),
-		again.WithTimeout(schedulerTimeout),
-	)
-	if err != nil {
-		t.Fatalf("failed to create retrier: %v", err)
-	}
+	retrier := newSchedulerTestRetrier(t, nonRetryableStatusMaxRetries)
+	sched := newTLSTestScheduler(t, server)
 
-	sched := scheduler.NewScheduler(
-		scheduler.WithHTTPClient(server.Client()),
-		scheduler.WithURLValidator(newTestURLValidator(t)),
-	)
-	defer sched.Stop()
-
-	_, err = sched.Schedule(scheduler.Job{
+	_, err := sched.Schedule(scheduler.Job{
 		Schedule: scheduler.Schedule{
 			Every:   10 * time.Millisecond,
 			MaxRuns: 1,
@@ -481,22 +382,8 @@ func TestSchedulerNonRetryableStatus(t *testing.T) {
 		t.Fatalf(scheduleJobError, err)
 	}
 
-	select {
-	case payload := <-callbackCh:
-		if payload.Success {
-			t.Fatal("expected failure for non-retryable status")
-		}
-
-		if payload.Attempts != 1 {
-			t.Fatalf("expected 1 attempt, got %d", payload.Attempts)
-		}
-
-		if payload.StatusCode != http.StatusBadRequest {
-			t.Fatalf("expected status %d, got %d", http.StatusBadRequest, payload.StatusCode)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for callback")
-	}
+	payload := waitForCallbackPayload(t, callbackCh)
+	assertNonRetryableCallbackPayload(t, payload)
 }
 
 func TestSchedulerCallbackBodyLimit(t *testing.T) {
@@ -510,13 +397,88 @@ func TestSchedulerCallbackBodyLimit(t *testing.T) {
 	mux.HandleFunc(targetPath, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 
-		_, err := w.Write([]byte(body))
-		if err != nil {
-			t.Fatalf("failed to write response: %v", err)
-		}
+		mustWriteResponseBody(t, w, body)
 	})
 
-	mux.HandleFunc(callbackPath, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(callbackPath, newCallbackPayloadHandler(t, callbackCh))
+
+	server := httptest.NewTLSServer(mux)
+	defer server.Close()
+
+	sched := newTLSTestScheduler(t, server)
+
+	_, err := sched.Schedule(scheduler.Job{
+		Schedule: scheduler.Schedule{
+			Every:   5 * time.Millisecond,
+			MaxRuns: 1,
+		},
+		Request: scheduler.Request{
+			Method: http.MethodGet,
+			URL:    server.URL + targetPath,
+		},
+		Callback: scheduler.Callback{
+			URL:          server.URL + callbackPath,
+			MaxBodyBytes: callbackBodyLimitMaxBytes,
+		},
+	})
+	if err != nil {
+		t.Fatalf(scheduleJobError, err)
+	}
+
+	payload := waitForCallbackPayload(t, callbackCh)
+	assertCallbackBodyLimitedPayload(t, payload, body[:callbackBodyLimitMaxBytes])
+}
+
+func newSchedulerTestRetrier(t *testing.T, maxRetries int) *again.Retrier {
+	t.Helper()
+
+	retrier, err := again.NewRetrier(
+		context.Background(),
+		again.WithMaxRetries(maxRetries),
+		again.WithInterval(1*time.Millisecond),
+		again.WithJitter(1*time.Millisecond),
+		again.WithTimeout(schedulerTimeout),
+	)
+	if err != nil {
+		t.Fatalf("failed to create retrier: %v", err)
+	}
+
+	return retrier
+}
+
+func newTLSTestScheduler(t *testing.T, server *httptest.Server) *scheduler.Scheduler {
+	t.Helper()
+
+	sched := scheduler.NewScheduler(
+		scheduler.WithHTTPClient(server.Client()),
+		scheduler.WithURLValidator(newTestURLValidator(t)),
+	)
+	t.Cleanup(sched.Stop)
+
+	return sched
+}
+
+func newRetryThenSuccessHandler(t *testing.T, targetHits *int32, successOnAttempt int32) http.HandlerFunc {
+	t.Helper()
+
+	return func(w http.ResponseWriter, _ *http.Request) {
+		hit := atomic.AddInt32(targetHits, 1)
+		if hit < successOnAttempt {
+			w.WriteHeader(http.StatusInternalServerError)
+			mustWriteResponseBody(t, w, "retry")
+
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		mustWriteResponseBody(t, w, "ok")
+	}
+}
+
+func newCallbackPayloadHandler(t *testing.T, callbackCh chan<- scheduler.CallbackPayload) http.HandlerFunc {
+	t.Helper()
+
+	return func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			err := r.Body.Close()
 			if err != nil {
@@ -534,53 +496,83 @@ func TestSchedulerCallbackBodyLimit(t *testing.T) {
 		callbackCh <- payload
 
 		w.WriteHeader(http.StatusOK)
-	})
-
-	server := httptest.NewTLSServer(mux)
-	defer server.Close()
-
-	sched := scheduler.NewScheduler(
-		scheduler.WithHTTPClient(server.Client()),
-		scheduler.WithURLValidator(newTestURLValidator(t)),
-	)
-	defer sched.Stop()
-
-	_, err := sched.Schedule(scheduler.Job{
-		Schedule: scheduler.Schedule{
-			Every:   5 * time.Millisecond,
-			MaxRuns: 1,
-		},
-		Request: scheduler.Request{
-			Method: http.MethodGet,
-			URL:    server.URL + targetPath,
-		},
-		Callback: scheduler.Callback{
-			URL:          server.URL + callbackPath,
-			MaxBodyBytes: 4,
-		},
-	})
-	if err != nil {
-		t.Fatalf(scheduleJobError, err)
 	}
+}
+
+func mustWriteResponseBody(t *testing.T, w http.ResponseWriter, body string) {
+	t.Helper()
+
+	_, err := w.Write([]byte(body))
+	if err != nil {
+		t.Fatalf("failed to write response: %v", err)
+	}
+}
+
+func waitForCallbackPayload(t *testing.T, callbackCh <-chan scheduler.CallbackPayload) scheduler.CallbackPayload {
+	t.Helper()
 
 	select {
 	case payload := <-callbackCh:
-		if !payload.Success {
-			t.Fatalf("expected success, got error %q", payload.Error)
-		}
-
-		if payload.Attempts != 1 {
-			t.Fatalf("expected 1 attempt, got %d", payload.Attempts)
-		}
-
-		if payload.StatusCode != http.StatusOK {
-			t.Fatalf("expected status %d, got %d", http.StatusOK, payload.StatusCode)
-		}
-
-		if payload.ResponseBody != body[:4] {
-			t.Fatalf("expected response body %q, got %q", body[:4], payload.ResponseBody)
-		}
-	case <-time.After(2 * time.Second):
+		return payload
+	case <-time.After(schedulerCallbackWaitTimeout):
 		t.Fatal("timed out waiting for callback")
+
+		return scheduler.CallbackPayload{}
+	}
+}
+
+func assertSuccessfulRetryCallbackPayload(t *testing.T, payload scheduler.CallbackPayload, jobID string) {
+	t.Helper()
+
+	if payload.JobID != jobID {
+		t.Fatalf("expected job id %q, got %q", jobID, payload.JobID)
+	}
+
+	if !payload.Success {
+		t.Fatalf("expected success, got error %q", payload.Error)
+	}
+
+	if payload.Attempts != retryAndCallbackAttempts {
+		t.Fatalf("expected %d attempts, got %d", retryAndCallbackAttempts, payload.Attempts)
+	}
+
+	if payload.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, payload.StatusCode)
+	}
+}
+
+func assertNonRetryableCallbackPayload(t *testing.T, payload scheduler.CallbackPayload) {
+	t.Helper()
+
+	if payload.Success {
+		t.Fatal("expected failure for non-retryable status")
+	}
+
+	if payload.Attempts != 1 {
+		t.Fatalf("expected 1 attempt, got %d", payload.Attempts)
+	}
+
+	if payload.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, payload.StatusCode)
+	}
+}
+
+func assertCallbackBodyLimitedPayload(t *testing.T, payload scheduler.CallbackPayload, wantBody string) {
+	t.Helper()
+
+	if !payload.Success {
+		t.Fatalf("expected success, got error %q", payload.Error)
+	}
+
+	if payload.Attempts != 1 {
+		t.Fatalf("expected 1 attempt, got %d", payload.Attempts)
+	}
+
+	if payload.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, payload.StatusCode)
+	}
+
+	if payload.ResponseBody != wantBody {
+		t.Fatalf("expected response body %q, got %q", wantBody, payload.ResponseBody)
 	}
 }
