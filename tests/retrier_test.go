@@ -22,6 +22,9 @@ const (
 	defaultRetryCount     = 3
 	defaultMaxRetries     = 5
 	defaultInterval       = 500 * time.Millisecond
+	defaultRetryTimeout   = 20 * time.Second
+	customRetryTimeout    = 30 * time.Second
+	shortRetryTimeout     = 5 * time.Second
 )
 
 func TestNewRetrier(t *testing.T) {
@@ -49,8 +52,8 @@ func TestNewRetrier(t *testing.T) {
 		t.Errorf("unexpected value for Interval: got %v, want %v", retrier.Interval, defaultInterval)
 	}
 
-	if retrier.Timeout != 20*time.Second {
-		t.Errorf("unexpected value for Timeout: got %v, want %v", retrier.Timeout, 20*time.Second)
+	if retrier.Timeout != defaultRetryTimeout {
+		t.Errorf("unexpected value for Timeout: got %v, want %v", retrier.Timeout, defaultRetryTimeout)
 	}
 
 	if retrier.Registry == nil {
@@ -64,7 +67,7 @@ func TestNewRetrier(t *testing.T) {
 		again.WithJitter(2*time.Second),
 		again.WithBackoffFactor(defaultBackoffFactor),
 		again.WithInterval(1*time.Second),
-		again.WithTimeout(30*time.Second),
+		again.WithTimeout(customRetryTimeout),
 	)
 	if err != nil {
 		t.Errorf("failed to create new Retrier: %v", err)
@@ -86,8 +89,8 @@ func TestNewRetrier(t *testing.T) {
 		t.Errorf("unexpected value for Interval: got %v, want %v", retrier.Interval, 1*time.Second)
 	}
 
-	if retrier.Timeout != 30*time.Second {
-		t.Errorf("unexpected value for Timeout: got %v, want %v", retrier.Timeout, 30*time.Second)
+	if retrier.Timeout != customRetryTimeout {
+		t.Errorf("unexpected value for Timeout: got %v, want %v", retrier.Timeout, customRetryTimeout)
 	}
 
 	// Test invalid options.
@@ -102,88 +105,88 @@ func TestNewRetrier(t *testing.T) {
 func TestRetrier_Validate(t *testing.T) {
 	t.Parallel()
 
-	// Test valid Retrier.
-	retrier := &again.Retrier{
+	testCases := []struct {
+		name        string
+		mutate      func(*again.Retrier)
+		errContains string
+	}{
+		{
+			name: "valid retrier",
+		},
+		{
+			name: "zero max retries is valid",
+			mutate: func(r *again.Retrier) {
+				r.MaxRetries = 0
+			},
+		},
+		{
+			name: "invalid max retries",
+			mutate: func(r *again.Retrier) {
+				r.MaxRetries = -1
+				r.Interval = 1 * time.Second
+				r.Timeout = 10 * time.Second
+			},
+			errContains: "invalid max retries",
+		},
+		{
+			name: "invalid backoff factor",
+			mutate: func(r *again.Retrier) {
+				r.BackoffFactor = 1
+				r.Interval = 1 * time.Second
+				r.Timeout = 10 * time.Second
+			},
+			errContains: "backoff factor",
+		},
+		{
+			name: "invalid interval and timeout",
+			mutate: func(r *again.Retrier) {
+				r.Interval = 10 * time.Second
+				r.Timeout = 1 * time.Second
+			},
+			errContains: "interval",
+		},
+		{
+			name: "invalid interval times max retries",
+			mutate: func(r *again.Retrier) {
+				r.Interval = 1 * time.Second
+				r.Timeout = shortRetryTimeout
+			},
+			errContains: "multiplied by max retries",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			retrier := newValidRetrierForValidation()
+			if tc.mutate != nil {
+				tc.mutate(retrier)
+			}
+
+			err := retrier.Validate()
+			if tc.errContains == "" {
+				if err != nil {
+					t.Errorf("failed to validate Retrier: %v", err)
+				}
+
+				return
+			}
+
+			if err == nil || !errors.Is(err, again.ErrInvalidRetrier) || !strings.Contains(err.Error(), tc.errContains) {
+				t.Errorf("expected validation error containing %q, got %v", tc.errContains, err)
+			}
+		})
+	}
+}
+
+func newValidRetrierForValidation() *again.Retrier {
+	return &again.Retrier{
 		MaxRetries:    defaultMaxRetries,
 		Jitter:        1 * time.Second,
 		BackoffFactor: 2,
 		Interval:      defaultInterval,
-		Timeout:       20 * time.Second,
-	}
-
-	err := retrier.Validate()
-	if err != nil {
-		t.Errorf("failed to validate Retrier: %v", err)
-	}
-
-	// Test zero MaxRetries is valid.
-	retrier = &again.Retrier{
-		MaxRetries:    0,
-		Jitter:        1 * time.Second,
-		BackoffFactor: 2,
-		Interval:      defaultInterval,
-		Timeout:       20 * time.Second,
-	}
-
-	err = retrier.Validate()
-	if err != nil {
-		t.Errorf("failed to validate Retrier with zero MaxRetries: %v", err)
-	}
-
-	// Test invalid MaxRetries.
-	retrier = &again.Retrier{
-		MaxRetries:    -1,
-		Jitter:        1 * time.Second,
-		BackoffFactor: 2,
-		Interval:      1 * time.Second,
-		Timeout:       10 * time.Second,
-	}
-
-	err = retrier.Validate()
-	if err == nil || !errors.Is(err, again.ErrInvalidRetrier) || !strings.Contains(err.Error(), "invalid max retries") {
-		t.Errorf("expected invalid max retries error, got %v", err)
-	}
-
-	// Test invalid BackoffFactor.
-	retrier = &again.Retrier{
-		MaxRetries:    defaultMaxRetries,
-		Jitter:        1 * time.Second,
-		BackoffFactor: 1,
-		Interval:      1 * time.Second,
-		Timeout:       10 * time.Second,
-	}
-
-	err = retrier.Validate()
-	if err == nil || !errors.Is(err, again.ErrInvalidRetrier) || !strings.Contains(err.Error(), "backoff factor") {
-		t.Errorf("expected invalid backoff factor error, got %v", err)
-	}
-
-	// Test invalid Interval and Timeout.
-	retrier = &again.Retrier{
-		MaxRetries:    defaultMaxRetries,
-		Jitter:        1 * time.Second,
-		BackoffFactor: 2,
-		Interval:      10 * time.Second,
-		Timeout:       1 * time.Second,
-	}
-
-	err = retrier.Validate()
-	if err == nil || !errors.Is(err, again.ErrInvalidRetrier) || !strings.Contains(err.Error(), "interval") {
-		t.Errorf("expected invalid interval error, got %v", err)
-	}
-
-	// Test invalid Interval * MaxRetries.
-	retrier = &again.Retrier{
-		MaxRetries:    defaultMaxRetries,
-		Jitter:        1 * time.Second,
-		BackoffFactor: 2,
-		Interval:      1 * time.Second,
-		Timeout:       5 * time.Second,
-	}
-
-	err = retrier.Validate()
-	if err == nil || !errors.Is(err, again.ErrInvalidRetrier) || !strings.Contains(err.Error(), "multiplied by max retries") {
-		t.Errorf("expected invalid interval*max retries error, got %v", err)
+		Timeout:       defaultRetryTimeout,
 	}
 }
 
