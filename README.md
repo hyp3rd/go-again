@@ -181,6 +181,7 @@ func main() {
 - `WithLogger(logger)` sets the scheduler logger.
 - `WithConcurrency(n)` limits concurrent executions when `n > 0`.
 - `WithURLValidator(validator)` overrides URL validation. Pass `nil` to disable validation.
+- `NewSchedulerWithError(...)` returns constructor errors (including default URL validator initialization failure).
 
 ### Scheduler Behavior Notes
 
@@ -191,6 +192,8 @@ func main() {
 - `Request.Timeout` and `Callback.Timeout` apply per HTTP request/callback (not the schedule lifetime).
 - If `RetryPolicy.Retrier` is nil, the scheduler creates a default retrier and loads registry defaults.
 - Calling `Schedule` after `Stop()` returns `scheduler.ErrSchedulerStopped`.
+- `JobCount()` and `JobIDs()` provide lightweight read-only scheduler introspection.
+- `NewScheduler()` logs a warning and continues if default URL validator initialization fails; use `NewSchedulerWithError()` to fail closed.
 
 ### Custom URL Validation (Allow Local HTTPS)
 
@@ -245,6 +248,7 @@ go test -bench=. -benchtime=3s -benchmem -run=^$ -memprofile=mem.out ./...
 - `Scheduler.Stop()` cancels the scheduler lifecycle; the same instance is not intended to be reused afterward.
 - `Retrier.Cancel()` / `Retrier.Stop()` are terminal for the retrier instance.
 - `DoWithContext` can only stop work promptly if the retryable function respects the provided context.
+- `NewScheduler()` (non-error constructor) intentionally degrades to warning-only behavior if default URL validator initialization fails; use `NewSchedulerWithError()` when you need constructor-time failure.
 
 ## Performance
 

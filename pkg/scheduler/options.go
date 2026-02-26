@@ -39,6 +39,7 @@ func WithConcurrency(n int) Option {
 // Pass nil to disable URL validation.
 func WithURLValidator(validator *validate.URLValidator) Option {
 	return func(s *Scheduler) {
+		s.urlValidatorConfigured = true
 		s.urlValidator = validator
 	}
 }

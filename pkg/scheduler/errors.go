@@ -10,6 +10,8 @@ var (
 	ErrInvalidJob = errors.New("invalid job")
 	// ErrSchedulerStopped is returned when scheduling is attempted after Stop.
 	ErrSchedulerStopped = errors.New("scheduler stopped")
+	// ErrURLValidatorInitialization is returned when the default URL validator cannot be created.
+	ErrURLValidatorInitialization = errors.New("url validator initialization failed")
 	// ErrUnsupportedMethod is returned for unsupported HTTP methods.
 	ErrUnsupportedMethod = errors.New("unsupported method")
 	// ErrRetryableStatus marks responses that should be retried.

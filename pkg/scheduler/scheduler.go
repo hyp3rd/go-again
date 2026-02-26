@@ -27,6 +27,11 @@ const (
 	defaultCallbackMaxBodySize = 4096
 )
 
+//nolint:gochecknoglobals // test seam for simulating default validator initialization failures.
+var newDefaultURLValidator = func() (*validate.URLValidator, error) {
+	return validate.NewURLValidator()
+}
+
 type jobEntry struct {
 	job    Job
 	cancel context.CancelFunc
@@ -42,13 +47,31 @@ type Scheduler struct {
 	ctx          context.Context //nolint:containedctx // base context for scheduler lifecycle
 	cancel       context.CancelFunc
 	urlValidator *validate.URLValidator
-	wg           sync.WaitGroup
-	counter      uint64
-	stopped      bool
+	// urlValidatorConfigured is true when callers explicitly set WithURLValidator, including nil.
+	urlValidatorConfigured bool
+	wg                     sync.WaitGroup
+	counter                uint64
+	stopped                bool
 }
 
 // NewScheduler creates a scheduler with the provided options.
 func NewScheduler(opts ...Option) *Scheduler {
+	schedulerInstance, err := NewSchedulerWithError(opts...)
+	if err != nil && schedulerInstance != nil && schedulerInstance.logger != nil {
+		schedulerInstance.logger.Log(
+			schedulerInstance.ctx,
+			slog.LevelWarn,
+			"default URL validator initialization failed; URL validation disabled unless overridden",
+			slog.Any("error", err),
+		)
+	}
+
+	return schedulerInstance
+}
+
+// NewSchedulerWithError creates a scheduler and returns an error when default URL validator initialization fails.
+// If WithURLValidator is provided (including nil), default validator initialization is skipped.
+func NewSchedulerWithError(opts ...Option) (*Scheduler, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	schedulerInstance := &Scheduler{
 		jobs:   make(map[string]*jobEntry),
@@ -58,16 +81,22 @@ func NewScheduler(opts ...Option) *Scheduler {
 		cancel: cancel,
 	}
 
-	validator, err := validate.NewURLValidator()
-	if err == nil {
-		schedulerInstance.urlValidator = validator
-	}
-
 	for _, opt := range opts {
 		opt(schedulerInstance)
 	}
 
-	return schedulerInstance
+	if schedulerInstance.urlValidatorConfigured {
+		return schedulerInstance, nil
+	}
+
+	validator, err := newDefaultURLValidator()
+	if err != nil {
+		return schedulerInstance, fmt.Errorf("%w: %w", ErrURLValidatorInitialization, err)
+	}
+
+	schedulerInstance.urlValidator = validator
+
+	return schedulerInstance, nil
 }
 
 // Schedule registers a job and starts its schedule loop.
@@ -143,6 +172,29 @@ func (s *Scheduler) Stop() {
 	s.mu.Unlock()
 
 	s.wg.Wait()
+}
+
+// JobCount returns the number of jobs currently registered in the scheduler.
+func (s *Scheduler) JobCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return len(s.jobs)
+}
+
+// JobIDs returns the currently registered job IDs in sorted order.
+func (s *Scheduler) JobIDs() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ids := make([]string, 0, len(s.jobs))
+	for id := range s.jobs {
+		ids = append(ids, id)
+	}
+
+	slices.Sort(ids)
+
+	return ids
 }
 
 func (s *Scheduler) nextID() string {
@@ -356,15 +408,10 @@ func (s *Scheduler) execute(ctx context.Context, job Job, scheduledAt time.Time)
 	startedAt := time.Now()
 	retrier := job.RetryPolicy.Retrier
 	temporaryErrors := s.buildTemporaryErrors(retrier, job.RetryPolicy)
-
-	var (
-		attempts   int
-		lastStatus int
-		lastBody   []byte
-	)
+	state := &executionState{}
 
 	errs := retrier.DoWithContext(ctx, func(attemptCtx context.Context) error {
-		attempts++
+		state.incrementAttempts()
 
 		reqCtx, cancel := s.requestContext(attemptCtx, job.Request.Timeout)
 		if cancel != nil {
@@ -393,14 +440,12 @@ func (s *Scheduler) execute(ctx context.Context, job Job, scheduledAt time.Time)
 			}
 		}()
 
-		lastStatus = resp.StatusCode
-
 		body, readErr := s.readBody(resp.Body, job.Callback.URL != "", job.Callback.MaxBodyBytes)
 		if readErr != nil {
 			s.logError("response body read failed", readErr)
 		}
 
-		lastBody = body
+		state.setLastResponse(resp.StatusCode, body)
 
 		if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
 			return nil
@@ -413,18 +458,59 @@ func (s *Scheduler) execute(ctx context.Context, job Job, scheduledAt time.Time)
 		return &StatusError{StatusCode: resp.StatusCode}
 	}, temporaryErrors...)
 
+	snapshot := state.snapshot()
+
 	finishedAt := time.Now()
 	s.sendCallback(ctx, job, CallbackPayload{
 		JobID:        job.ID,
 		ScheduledAt:  scheduledAt,
 		StartedAt:    startedAt,
 		FinishedAt:   finishedAt,
-		Attempts:     attempts,
+		Attempts:     snapshot.attempts,
 		Success:      errs.Last == nil,
-		StatusCode:   lastStatus,
+		StatusCode:   snapshot.status,
 		Error:        errorString(errs.Last),
-		ResponseBody: string(lastBody),
+		ResponseBody: string(snapshot.body),
 	})
+}
+
+type executionState struct {
+	mu         sync.Mutex
+	attempts   int
+	lastStatus int
+	lastBody   []byte
+}
+
+type executionSnapshot struct {
+	attempts int
+	status   int
+	body     []byte
+}
+
+func (s *executionState) incrementAttempts() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.attempts++
+}
+
+func (s *executionState) setLastResponse(status int, body []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.lastStatus = status
+	s.lastBody = body
+}
+
+func (s *executionState) snapshot() executionSnapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return executionSnapshot{
+		attempts: s.attempts,
+		status:   s.lastStatus,
+		body:     append([]byte(nil), s.lastBody...),
+	}
 }
 
 func (*Scheduler) requestContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {

@@ -1,12 +1,17 @@
 package tests
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,6 +26,7 @@ const (
 	schedulerTimeout             = 200 * time.Millisecond
 	schedulerRetries             = 5
 	schedulerCallbackWaitTimeout = 2 * time.Second
+	schedulerLogWaitTimeout      = 2 * time.Second
 	retryAndCallbackAttempts     = 3
 	nonRetryableStatusMaxRetries = 3
 	callbackBodyLimitMaxBytes    = 4
@@ -213,6 +219,60 @@ func TestSchedulerScheduleAfterStopReturnsError(t *testing.T) {
 	})
 	if err == nil || !errors.Is(err, scheduler.ErrSchedulerStopped) {
 		t.Fatalf("expected scheduler stopped error, got %v", err)
+	}
+}
+
+func TestSchedulerJobIntrospection(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	sched := newTLSTestScheduler(t, server)
+
+	startAt := time.Now().Add(500 * time.Millisecond)
+	job := scheduler.Job{
+		Schedule: scheduler.Schedule{
+			Every:   time.Second,
+			StartAt: startAt,
+			MaxRuns: 1,
+		},
+		Request: scheduler.Request{
+			Method: http.MethodGet,
+			URL:    server.URL + targetPath,
+		},
+	}
+
+	jobID1, err := sched.Schedule(job)
+	if err != nil {
+		t.Fatalf(scheduleJobError, err)
+	}
+
+	jobID2, err := sched.Schedule(job)
+	if err != nil {
+		t.Fatalf(scheduleJobError, err)
+	}
+
+	if got := sched.JobCount(); got != 2 {
+		t.Fatalf("expected 2 registered jobs, got %d", got)
+	}
+
+	gotIDs := sched.JobIDs()
+	wantIDs := []string{jobID1, jobID2}
+	slices.Sort(wantIDs)
+
+	if !slices.Equal(gotIDs, wantIDs) {
+		t.Fatalf("expected job ids %v, got %v", wantIDs, gotIDs)
+	}
+
+	if !sched.Remove(jobID1) || !sched.Remove(jobID2) {
+		t.Fatal("expected scheduled jobs to be removable")
+	}
+
+	if got := sched.JobCount(); got != 0 {
+		t.Fatalf("expected 0 registered jobs after removal, got %d", got)
 	}
 }
 
@@ -566,6 +626,43 @@ func TestSchedulerCallbackBodyLimit(t *testing.T) {
 	assertCallbackBodyLimitedPayload(t, payload, body[:callbackBodyLimitMaxBytes])
 }
 
+func TestSchedulerLoggerWarnsOnCallbackSendFailure(t *testing.T) {
+	t.Parallel()
+
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+
+	logBuffer := &lockedBuffer{}
+	logger := slog.New(slog.NewTextHandler(logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	sched := scheduler.NewScheduler(
+		scheduler.WithLogger(logger),
+		scheduler.WithURLValidator(nil),
+	)
+	defer sched.Stop()
+
+	_, err := sched.Schedule(scheduler.Job{
+		Schedule: scheduler.Schedule{
+			Every:   5 * time.Millisecond,
+			MaxRuns: 1,
+		},
+		Request: scheduler.Request{
+			Method: http.MethodGet,
+			URL:    target.URL,
+		},
+		Callback: scheduler.Callback{
+			URL: "http://127.0.0.1:1/callback",
+		},
+	})
+	if err != nil {
+		t.Fatalf(scheduleJobError, err)
+	}
+
+	waitForLogSubstring(t, logBuffer, "callback send failed")
+}
+
 func newSchedulerTestRetrier(t *testing.T, maxRetries int) *again.Retrier {
 	t.Helper()
 
@@ -747,4 +844,43 @@ func assertCallbackBodyLimitedPayload(t *testing.T, payload scheduler.CallbackPa
 	if payload.ResponseBody != wantBody {
 		t.Fatalf("expected response body %q, got %q", wantBody, payload.ResponseBody)
 	}
+}
+
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	n, err := b.buf.Write(p)
+	if err != nil {
+		return 0, fmt.Errorf("locked buffer write failed: %w", err)
+	}
+
+	return n, nil
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.buf.String()
+}
+
+func waitForLogSubstring(t *testing.T, buf *lockedBuffer, want string) {
+	t.Helper()
+
+	deadline := time.Now().Add(schedulerLogWaitTimeout)
+	for time.Now().Before(deadline) {
+		if strings.Contains(buf.String(), want) {
+			return
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatalf("timed out waiting for log containing %q; logs=%q", want, buf.String())
 }

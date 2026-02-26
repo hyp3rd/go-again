@@ -64,8 +64,11 @@ After this audit, a follow-up implementation pass completed the highest-priority
 - `Schedule()` now returns `ErrSchedulerStopped` after `Scheduler.Stop()` is called.
 - `Makefile` `run` now executes `__examples/*` (`make run example=...`) and `bench` now uses a valid `go test` benchmark command.
 - Added tests for retrier hooks, scheduler concurrency limiting, scheduler post-stop scheduling guard, and completed-job cleanup behavior.
+- Added `NewSchedulerWithError(...)` to surface default URL validator initialization failures while keeping `NewScheduler(...)` backward-compatible (warning + continue).
+- Added lightweight scheduler introspection methods: `JobCount()` and `JobIDs()`.
+- Added scheduler logger coverage for callback send failures.
 
-This closes gap `#1`, closes gap `#5`, and partially addresses gap `#2` and gap `#7` below.
+This closes gap `#1`, closes gap `#5`, and partially addresses gaps `#2`, `#4`, `#6`, and `#7` below.
 
 ## Status vs Original PRD
 
@@ -130,18 +133,12 @@ This closes gap `#1`, closes gap `#5`, and partially addresses gap `#2` and gap 
 
 ## Gaps, Missing Features, and Flaws (Prioritized)
 
-### 1. Completed scheduler jobs are not automatically removed from the internal job map
+### 1. Resolved: completed scheduler jobs are automatically removed from the internal job map
 
-- Impact:
-      - Long-running processes that schedule many one-shot jobs can accumulate stale entries.
-      - `Remove(id)` can return `true` for jobs that already finished, which is surprising.
-- Evidence:
-      - `Schedule()` stores jobs in `s.jobs`.
-      - `runJob()` exits on completion but does not delete the entry.
-      - `Stop()` clears the map, but normal completion does not.
-- Recommendation:
-      - Add completion cleanup (`defer` removal) with care around concurrent `Remove()` calls.
-      - Optionally expose job status and retain completed jobs only when explicitly configured.
+- Status:
+      - Fixed by `runJob()` cleanup (`defer s.cleanupJob(entry)`), with pointer matching to avoid deleting a replacement job entry.
+- Remaining consideration:
+      - Richer job status retention/history is still not implemented (see gap `#6`).
 
 ### 2. Lifecycle terminal semantics are easy to misuse and were undocumented
 
@@ -164,29 +161,27 @@ This closes gap `#1`, closes gap `#5`, and partially addresses gap `#2` and gap 
       - Keep this clearly documented (done in README).
       - Optionally add stronger docs/examples/tests around cooperative cancellation patterns.
 
-### 4. Scheduler default URL validator initialization failure silently disables validation
+### 4. Scheduler default URL validator initialization failure can still degrade to warning-only behavior when using `NewScheduler()`
 
-- In `NewScheduler()`, if `validate.NewURLValidator()` returns an error, the scheduler proceeds with `urlValidator == nil`.
+- `NewSchedulerWithError()` now surfaces default validator initialization failures.
+- `NewScheduler()` remains backward-compatible and logs a warning, then proceeds without default validation unless callers provide `WithURLValidator`.
 - Impact:
-      - Security expectations ("validation on by default") can be violated silently in rare initialization-failure scenarios.
+      - Callers using `NewScheduler()` may still get warning-only fail-open behavior in rare initialization-failure scenarios.
 - Recommendation:
-      - Prefer fail-fast or explicit logging when default validator creation fails.
-      - Alternative: add `NewSchedulerWithError(...) (*Scheduler, error)` constructor.
+      - Prefer `NewSchedulerWithError()` in security-sensitive code paths.
+      - Keep `NewScheduler()` behavior documented as compatibility mode.
 
-### 5. Repo developer UX drift: Makefile targets do not match current repository contents/docs
+### 5. Resolved: repo developer UX drift in `Makefile` commands
 
-- `README.md` previously instructed `make run example=...`, but `Makefile` does not implement that behavior.
-- `Makefile` `run` target references `./cmd/app`, which is not present in this repo.
-- `Makefile` `bench` target uses a malformed `-run` flag sequence (`-run=^-memprofile=...`).
-- Impact:
-      - New contributors lose time on broken commands.
-- Recommendation:
-      - Add a real example runner target, or remove/rename scaffold `run`.
-      - Fix `bench` target command to `-run=^$ -memprofile=mem.out`.
+- Status:
+      - `make run example=...` now runs `__examples/*`.
+      - `bench` target now uses a valid benchmark command (`-run=^$ -memprofile=mem.out`).
+- Remaining consideration:
+      - The Makefile still contains some scaffold-oriented targets that may not be relevant to this repo's current scope.
 
 ### 6. Missing scheduler introspection/status APIs
 
-- Current API supports `Schedule`, `Remove`, `Stop`, but not:
+- Current API now supports lightweight introspection (`JobCount`, `JobIDs`) in addition to `Schedule`, `Remove`, and `Stop`, but not:
       - list jobs,
       - query job state,
       - inspect last run result,
@@ -199,11 +194,9 @@ This closes gap `#1`, closes gap `#5`, and partially addresses gap `#2` and gap 
 ### 7. Test coverage gaps (non-blocking, but worth addressing)
 
 - No explicit tests for:
-      - scheduler concurrency limiting/backpressure behavior (`WithConcurrency`)
-      - scheduler logger behavior (`WithLogger`)
-      - retrier hooks (`Hooks.OnRetry`)
-      - behavior of `Schedule()` after `Scheduler.Stop()`
-      - automatic cleanup of completed jobs (feature currently missing)
+      - full scheduler logger behavior coverage (`WithLogger`) beyond the callback-send-failure path
+      - additional introspection/status behavior once richer status APIs are added
+      - `NewScheduler()` warning-path logging when default URL validator initialization fails
 - Recommendation:
       - Add focused tests before changing scheduler lifecycle semantics.
 
