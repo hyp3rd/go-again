@@ -353,8 +353,8 @@ func (s *Scheduler) execute(ctx context.Context, job Job, scheduledAt time.Time)
 			req.Header.Set(key, value)
 		}
 
-		//nolint:gosec // G704 false positive: job request URL is validated/normalized in normalizeRequest before scheduling.
-		resp, err := s.client.Do(req)
+		// G704 false positive: job request URL is validated/normalized in normalizeRequest before scheduling.
+		resp, err := s.client.Do(req) // #nosec G704
 		if err != nil {
 			return ewrap.Wrap(err, "request failed")
 		}
@@ -438,8 +438,8 @@ func (s *Scheduler) sendCallback(ctx context.Context, job Job, payload CallbackP
 		req.Header.Set(key, value)
 	}
 
-	//nolint:gosec // G704 false positive: callback URL is validated/normalized in normalizeCallback before scheduling.
-	resp, err := s.client.Do(req)
+	// G704 false positive: callback URL is validated/normalized in normalizeCallback before scheduling.
+	resp, err := s.client.Do(req) // #nosec G704
 	if err != nil {
 		s.logError("callback send failed", err)
 
