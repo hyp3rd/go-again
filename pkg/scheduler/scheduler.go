@@ -44,6 +44,7 @@ type Scheduler struct {
 	urlValidator *validate.URLValidator
 	wg           sync.WaitGroup
 	counter      uint64
+	stopped      bool
 }
 
 // NewScheduler creates a scheduler with the provided options.
@@ -71,13 +72,17 @@ func NewScheduler(opts ...Option) *Scheduler {
 
 // Schedule registers a job and starts its schedule loop.
 func (s *Scheduler) Schedule(job Job) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.stopped {
+		return "", ErrSchedulerStopped
+	}
+
 	normalized, err := s.normalizeJob(job)
 	if err != nil {
 		return "", err
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	if normalized.ID == "" {
 		normalized.ID = s.nextID()
@@ -96,7 +101,7 @@ func (s *Scheduler) Schedule(job Job) (string, error) {
 
 	s.wg.Add(1)
 
-	go s.runJob(ctx, entry.job)
+	go s.runJob(ctx, entry)
 
 	return normalized.ID, nil
 }
@@ -119,9 +124,16 @@ func (s *Scheduler) Remove(id string) bool {
 
 // Stop cancels all jobs and waits for completion.
 func (s *Scheduler) Stop() {
-	s.cancel()
-
 	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		s.wg.Wait()
+
+		return
+	}
+
+	s.stopped = true
+	s.cancel()
 
 	for _, entry := range s.jobs {
 		entry.cancel()
@@ -255,8 +267,11 @@ func ensureRetrier(job *Job) error {
 	return nil
 }
 
-func (s *Scheduler) runJob(ctx context.Context, job Job) {
+func (s *Scheduler) runJob(ctx context.Context, entry *jobEntry) {
 	defer s.wg.Done()
+	defer s.cleanupJob(entry)
+
+	job := entry.job
 
 	if !job.Schedule.StartAt.IsZero() {
 		if !s.waitUntil(ctx, job.Schedule.StartAt) {
@@ -292,6 +307,18 @@ func (s *Scheduler) runJob(ctx context.Context, job Job) {
 		case <-ticker.C:
 		}
 	}
+}
+
+func (s *Scheduler) cleanupJob(entry *jobEntry) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	current, ok := s.jobs[entry.job.ID]
+	if !ok || current != entry {
+		return
+	}
+
+	delete(s.jobs, entry.job.ID)
 }
 
 func (*Scheduler) waitUntil(ctx context.Context, when time.Time) bool {

@@ -1,164 +1,277 @@
-# PRD: go-again Retrier Hardening + Scheduler Extension
+# PRD: go-again Current State Audit, Documentation Alignment, and Gap Backlog
 
-## Context
+## Audit Date
 
-`go-again` retries a function with exponential backoff, jitter, and timeout. It provides a registry for temporary errors, cancellation support, and error aggregation. The goal is to fix correctness issues and align documentation with current APIs without changing the public surface.
+February 26, 2026
 
-## Goals
+## Purpose
 
-- Ensure `Retrier.Do` is safe for concurrent calls.
-- Return early on non-temporary errors when a temporary-error list is supplied.
-- Avoid panics when `Retrier` is constructed without `NewRetrier`.
-- Make timeout errors detectable via `errors.Is`.
-- Align README examples and API description with the code.
+This document replaces the earlier change-focused PRD ("Retrier Hardening + Scheduler Extension") with a status-aligned PRD for the current repository state.
 
-## Non-Goals
+It captures:
 
-- Redesign backoff or introduce new retry strategies.
-- Avoid broad API expansion beyond a context-aware retry variant.
+- what is implemented today,
+- how the implementation compares to the original PRD goals/acceptance criteria,
+- what documentation was updated,
+- what gaps, missing features, and flaws remain.
+
+## Scope Reviewed
+
+### Core packages
+
+- `retrier.go`
+- `registry.go`
+- `timer.go`
+- `options.go`
+- `errors.go`
+- `pkg/scheduler/*.go`
+
+### Tests
+
+- `tests/retrier_test.go`
+- `tests/scheduler_test.go`
+- `tests/registry_test.go`
+- `tests/timer_test.go`
+
+### Docs / repo UX
+
+- `README.md`
+- `Makefile`
+- `.pre-commit-config.yaml`
+- `.pre-commit-ci-config.yaml`
+
+## Validation Snapshot
+
+Executed during this audit:
+
+- `go test ./...` -> pass
+- `go test -race ./...` -> pass
+- `staticcheck ./...` -> pass
+- `golangci-lint run` -> pass (`0 issues`)
+
+## Executive Summary
+
+- The original retrier hardening goals are implemented and tested.
+- The scheduler extension is implemented and tested.
+- The README previously contained several repo/runtime mismatches (example runner commands, outdated wording, missing lifecycle limitations); those docs are now aligned.
+- Remaining work is mostly operational polish and lifecycle/introspection gaps, not core retry correctness.
+
+## Follow-Up Update (Implemented)
+
+After this audit, a follow-up implementation pass completed the highest-priority cleanup and DX items:
+
+- Scheduler now removes completed jobs from internal state and avoids deleting newly scheduled replacements by matching the stored `jobEntry` pointer.
+- `Schedule()` now returns `ErrSchedulerStopped` after `Scheduler.Stop()` is called.
+- `Makefile` `run` now executes `__examples/*` (`make run example=...`) and `bench` now uses a valid `go test` benchmark command.
+- Added tests for retrier hooks, scheduler concurrency limiting, scheduler post-stop scheduling guard, and completed-job cleanup behavior.
+
+This closes gap `#1`, closes gap `#5`, and partially addresses gap `#2` and gap `#7` below.
+
+## Status vs Original PRD
+
+### Retrier Hardening Goals (Original PRD)
+
+- `Do` concurrent safety: implemented
+      - Error state is per-call (`Errors` object from pool), not shared mutable retrier state.
+      - Verified by `go test -race ./...`.
+- Early return on non-temporary errors: implemented
+      - Stops without appending `ErrMaxRetriesReached`.
+      - Covered by `TestDo_NonTemporaryStopsEarly`.
+- Manual `Retrier` initialization safety (no panic without `NewRetrier`): implemented
+      - Internal lazy initialization via `ensureInitialized()`.
+      - Covered by `TestDo_ManualRetrierInitialization`.
+- Timeout detectability via `errors.Is(..., ErrTimeoutReached)`: implemented
+      - Covered by `TestRetryTimeout`.
+- README/API alignment: partially complete before this audit, now updated in this pass.
+- Context-aware retry method for long-running operations: implemented (`DoWithContext`)
+      - Covered by `TestDoWithContext_Cancel`.
+
+### Scheduler Extension Goals (Original PRD)
+
+- Interval scheduling with `StartAt`, `EndAt`, `MaxRuns`: implemented
+      - Covered by `TestSchedulerEndAtInPastStopsImmediately`, `TestSchedulerMaxRunsStops`.
+- Optional callback with bounded response body: implemented
+      - Covered by `TestSchedulerRetryAndCallback`, `TestSchedulerCallbackBodyLimit`.
+- Retrier integration for retryable statuses/errors: implemented
+      - Covered by `TestSchedulerRetryAndCallback`, `TestSchedulerNonRetryableStatus`.
+- URL validation on by default, override/disable support: implemented
+      - Covered by `TestSchedulerURLValidationRejectsHTTP`, `TestSchedulerURLValidationDisabledAllowsHTTP`.
+- Custom HTTP client / concurrency / logging support: implemented in API
+      - `WithHTTPClient`, `WithConcurrency`, `WithLogger`, `WithURLValidator`.
+      - Logging/concurrency behavior exists but is not deeply covered by tests.
 
 ## Current Feature Inventory
 
-- Configurable retry policy: max retries, backoff factor, interval, jitter, timeout.
-- Temporary error registry with defaults and custom registration.
-- Cancellation via caller context and `Retrier.Cancel`/`Retrier.Stop`.
-- Error aggregation via `Errors` (attempt trace + `Join`).
-- `DoWithResult` helper, hooks, and optional logging.
+### Retrier
 
-## Gaps / Bugs
+- Configurable retry policy (`MaxRetries`, `Interval`, `Jitter`, `BackoffFactor`, `Timeout`)
+- Temporary error registry (`Registry`) with defaults via `LoadDefaults()`
+- Retry filtering from explicit temporary error list or registry defaults
+- Retry-all fallback when no temporary list is supplied and the registry is empty
+- `Do(ctx, func() error, temporaryErrors...)`
+- `DoWithContext(ctx, func(context.Context) error, temporaryErrors...)`
+- `DoWithResult[T]`
+- Cancellation via caller context and retrier lifecycle (`Cancel`, `Stop`)
+- Error trace aggregation via `Errors{Attempts, Last}` and `Errors.Join()`
+- Optional logging (`slog`) and retry hooks (`Hooks.OnRetry`)
 
-- Shared mutable error field introduces data races under concurrent `Do` calls.
-- Non-temporary errors can still append `ErrMaxRetriesReached`.
-- `Retrier` built without `NewRetrier` can panic due to nil timer/context/registry.
-- Timeout errors are not wrapped with `ErrTimeoutReached`, so `errors.Is` fails.
-- README examples and `Errors` struct definition are out of date.
+### Scheduler
 
-## Requirements
+- In-memory scheduler with per-job goroutine lifecycle
+- Request execution with supported methods: `GET`, `POST`, `PUT`
+- Request retrying through `again.Retrier`
+- Retry-by-status (`RetryStatusCodes`) and retry-by-error (`TemporaryErrors`)
+- Optional callback payload with execution metadata and bounded response body
+- URL validation by default via `sectools` (customizable/disable-able)
+- Custom HTTP client (`WithHTTPClient`)
+- Optional concurrency limit (`WithConcurrency`)
+- Logging (`WithLogger`)
+- Job removal (`Remove`) and scheduler shutdown (`Stop`)
 
-### Functional
+## Gaps, Missing Features, and Flaws (Prioritized)
 
-- `Do` uses per-call error state only (no shared fields).
-- Non-temporary errors return immediately when a temporary list is provided.
-- `Do` initializes missing internals (timer pool, registry, context, pool) safely.
-- Timeout path wraps `ErrTimeoutReached` as the cause.
-- When `temporaryErrors` is empty, use the registry if it has entries; if the registry is empty, retry all errors.
-- `MaxRetries` counts retries after the first attempt (total attempts = `MaxRetries + 1`).
-- Provide a context-aware retry method for long-running operations.
-- README reflects actual `Errors` fields and registry usage.
+### 1. Completed scheduler jobs are not automatically removed from the internal job map
 
-### Non-Functional
+- Impact:
+      - Long-running processes that schedule many one-shot jobs can accumulate stale entries.
+      - `Remove(id)` can return `true` for jobs that already finished, which is surprising.
+- Evidence:
+      - `Schedule()` stores jobs in `s.jobs`.
+      - `runJob()` exits on completion but does not delete the entry.
+      - `Stop()` clears the map, but normal completion does not.
+- Recommendation:
+      - Add completion cleanup (`defer` removal) with care around concurrent `Remove()` calls.
+      - Optionally expose job status and retain completed jobs only when explicitly configured.
 
-- Preserve current public API and default behavior.
-- Maintain performance characteristics (no per-attempt allocations beyond today).
+### 2. Lifecycle terminal semantics are easy to misuse and were undocumented
 
-## Proposed Changes
+- `Retrier.Cancel()` / `Retrier.Stop()` cancel the retrier's internal lifecycle context permanently.
+- `Scheduler.Stop()` cancels the scheduler lifecycle; reusing the same instance after `Stop()` is not a supported pattern.
+- Impact:
+        - Reusing instances after cancel/stop can produce confusing behavior (immediate cancellation, jobs never running).
+      - Recommendation:
+        - Keep docs explicit (done in README).
+        - Consider defensive guards (for example, returning an error from `Schedule()` after `Stop()`).
 
-- Remove reliance on `Retrier.err`; use local variables per call.
-- Add internal initialization to avoid nil timer/context/registry/pool.
-- Wrap timeouts with `ErrTimeoutReached` and include attempt + last error in message.
-- Return early on non-temporary errors when a list is provided.
-- Default to registry-based filtering when `temporaryErrors` is omitted (fallback to retry-all if registry is empty).
-- Update `MaxRetries` semantics to mean retries after the first attempt and document it.
-- Add a context-aware retry method for long-running operations.
-- Update README snippets and API notes to match current code.
+### 3. `DoWithContext` depends on cooperative cancellation and can leave work running if the callback ignores context
 
-## Acceptance Criteria
+- Implementation detail:
+      - `DoWithContext` runs the retryable function in a goroutine and returns on timeout/cancel.
+      - If user code ignores `ctx.Done()`, the goroutine may continue running until the function exits.
+- Impact:
+      - Potential goroutine/work leakage in user applications.
+- Recommendation:
+      - Keep this clearly documented (done in README).
+      - Optionally add stronger docs/examples/tests around cooperative cancellation patterns.
 
-- `Do` is safe for concurrent calls (race-free under `go test -race`).
-- Non-temporary errors stop retries when a list is provided (no max-retries marker).
-- Manually constructed `Retrier` does not panic in `Do`.
-- Timeout errors satisfy `errors.Is(err, ErrTimeoutReached)`.
-- Registry defaults are applied when no temporary list is provided (while retry-all still works when the registry is empty).
-- `MaxRetries` yields `MaxRetries + 1` total attempts.
-- Context-aware retry method returns when the passed context is canceled.
-- README examples compile against the current API.
+### 4. Scheduler default URL validator initialization failure silently disables validation
 
-## Test Plan
+- In `NewScheduler()`, if `validate.NewURLValidator()` returns an error, the scheduler proceeds with `urlValidator == nil`.
+- Impact:
+      - Security expectations ("validation on by default") can be violated silently in rare initialization-failure scenarios.
+- Recommendation:
+      - Prefer fail-fast or explicit logging when default validator creation fails.
+      - Alternative: add `NewSchedulerWithError(...) (*Scheduler, error)` constructor.
 
-- Add a test verifying non-temporary error returns early (no max-retries marker).
-- Add a test ensuring manually constructed `Retrier` does not panic in `Do`.
-- Assert `errors.Is(err, ErrTimeoutReached)` is true on timeouts.
-- Add a test verifying registry defaults are used when the temporary list is empty.
-- Add a test verifying `MaxRetries` yields `MaxRetries + 1` total attempts.
-- Add a test for context-aware retries honoring context cancellation.
-- Run `go test ./...`.
+### 5. Repo developer UX drift: Makefile targets do not match current repository contents/docs
+
+- `README.md` previously instructed `make run example=...`, but `Makefile` does not implement that behavior.
+- `Makefile` `run` target references `./cmd/app`, which is not present in this repo.
+- `Makefile` `bench` target uses a malformed `-run` flag sequence (`-run=^-memprofile=...`).
+- Impact:
+      - New contributors lose time on broken commands.
+- Recommendation:
+      - Add a real example runner target, or remove/rename scaffold `run`.
+      - Fix `bench` target command to `-run=^$ -memprofile=mem.out`.
+
+### 6. Missing scheduler introspection/status APIs
+
+- Current API supports `Schedule`, `Remove`, `Stop`, but not:
+      - list jobs,
+      - query job state,
+      - inspect last run result,
+      - metrics hooks.
+- Impact:
+      - Usable for embedded/simple scheduling, but limited for production observability.
+- Recommendation:
+      - Add optional read-only introspection APIs without breaking the current simple API.
+
+### 7. Test coverage gaps (non-blocking, but worth addressing)
+
+- No explicit tests for:
+      - scheduler concurrency limiting/backpressure behavior (`WithConcurrency`)
+      - scheduler logger behavior (`WithLogger`)
+      - retrier hooks (`Hooks.OnRetry`)
+      - behavior of `Schedule()` after `Scheduler.Stop()`
+      - automatic cleanup of completed jobs (feature currently missing)
+- Recommendation:
+      - Add focused tests before changing scheduler lifecycle semantics.
+
+## Missing Features (Deliberately Out of Scope Today)
+
+These remain non-goals unless product scope changes:
+
+- Persistent schedules / durable storage
+- Distributed scheduler coordination
+- Cron expressions
+- Non-HTTP protocols (including gRPC scheduling targets)
+
+## Documentation Alignment Completed in This Audit
+
+### README updates
+
+- Corrected feature descriptions and API wording
+- Added explicit retrier and scheduler behavior notes
+- Documented lifecycle limitations and cooperative cancellation requirements
+- Replaced broken example commands with working `go run ./__examples/...` commands
+- Added current dev/test/lint command references
+- Added known limitations section
+
+### PRD updates
+
+- Converted from change-request format to current-state audit + backlog
+- Added implementation status vs original PRD
+- Added prioritized gap list and follow-up recommendations
+
+## Follow-Up PRD (Next Increment)
+
+### Goals
+
+- Fix scheduler completed-job cleanup and lifecycle clarity
+- Improve developer command UX in `Makefile`
+- Harden URL validator initialization behavior
+- Add missing tests for concurrency/hooks/lifecycle edge cases
+
+### Functional Requirements
+
+- Scheduler automatically removes completed jobs from `s.jobs` (or exposes retention mode explicitly)
+- `Schedule()` returns a clear error if called after `Stop()`
+- Makefile provides a working example runner target (or removes invalid `run`)
+- `bench` target runs with a correct `go test` benchmark command
+- Scheduler constructor surfaces URL validator initialization failures (error or warning)
+
+### Non-Functional Requirements
+
+- Preserve existing public retry/scheduler behavior where possible
+- Avoid introducing data races or significant allocations
+- Keep default scheduler usage simple for current users
+
+### Acceptance Criteria
+
+- No stale job map growth after one-shot jobs complete (verified by test)
+- `Schedule()` after `Stop()` has deterministic documented behavior (verified by test)
+- `make` example/bench commands documented in README and validated locally
+- `go test ./...` and `go test -race ./...` remain green
+- `golangci-lint run` and `staticcheck ./...` remain green
 
 ## Risks
 
-- Consumers matching error strings may need updates due to wrapping changes.
-- Retrier validation rules can cause tests to fail if timeout/interval/max-retry combinations are invalid.
-- Services relying on retry-all behavior may need to keep the registry empty when omitting the temporary list.
-
-## Decisions
-
-- `temporaryErrors` defaults to the registry when omitted; retry-all behavior remains when the registry is empty.
-- `MaxRetries` counts retries after the first attempt.
-- Long-running calls should be differentiated by offering a context-aware retry method.
-
-## Dependencies
-
-- Go toolchain (module `go.mod`), `github.com/hyp3rd/ewrap`, `github.com/hyp3rd/sectools`.
+- Changing scheduler cleanup semantics may affect callers implicitly relying on `Remove()` succeeding after completion.
+- Exposing constructor errors or adding stop-state guards can be behavior changes for existing consumers.
+- Makefile fixes may affect users depending on the current scaffold-style targets.
 
 ## Rollout
 
-- Cut a patch release after tests pass.
-- Add brief release notes covering retry correctness and documentation fixes.
-
-## Scheduler Extension
-
-### Context (Scheduler Extension)
-
-`go-again` now includes a lightweight scheduler for recurring HTTP requests with retry support and optional callbacks.
-
-### Goals (Scheduler Extension)
-
-- Schedule HTTP requests on an interval with optional `StartAt`, `EndAt`, and `MaxRuns`.
-- Post execution results to an optional callback URL with a bounded response body.
-- Reuse the retrier for retryable status codes and error classes.
-- Validate request and callback URLs by default, with the ability to customize or disable validation.
-- Support custom HTTP clients, concurrency limits, and logging hooks.
-
-### Non-Goals (Scheduler Extension)
-
-- Persistent schedule storage or distributed coordination.
-- Cron expression support.
-- Non-HTTP protocols or gRPC endpoints.
-
-### Requirements (Scheduler Extension)
-
-#### Functional (Scheduler Extension)
-
-- Support `GET`, `POST`, `PUT` for requests and callbacks.
-- Validate URLs with sectools defaults (HTTPS only, no userinfo, no private/localhost).
-- Provide `WithURLValidator` to override or disable validation.
-- Allow retries via `RetryPolicy` (`Retrier`, `TemporaryErrors`, `RetryStatusCodes`).
-- Skip callbacks when `Callback.URL` is empty.
-
-#### Non-Functional (Scheduler Extension)
-
-- Concurrency-safe scheduling and execution.
-- Avoid global mutable state; keep overhead minimal.
-
-### Acceptance Criteria (Scheduler Extension)
-
-- Schedules respect `StartAt`, `EndAt`, and `MaxRuns`.
-- Retry stops on success; non-retryable statuses stop immediately.
-- Callback payload includes attempts, status, error, and bounded response body.
-- URL validation is enforced by default and can be disabled.
-
-### Test Plan (Scheduler Extension)
-
-- Retry and callback flow is covered with TLS endpoints.
-- Validation rejects non-HTTPS URLs; disabling validation allows HTTP.
-- `EndAt` in the past skips execution.
-- `Remove` cancels pending jobs before execution.
-- Non-retryable status returns after one attempt.
-
-### Decisions (Scheduler Extension)
-
-- Use sectools URL validation by default.
-- Allow callers to provide a custom validator or disable validation with `nil`.
-
-### Status (Scheduler Extension)
-
-- Tests and race checks are reported green with no behavioral changes.
+- Land doc alignment first (this change).
+- Implement follow-up behavior changes in a separate PR with targeted tests.
+- Include release notes for scheduler lifecycle/cleanup changes if behavior changes are introduced.

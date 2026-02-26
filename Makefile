@@ -17,14 +17,18 @@ test-race:
 	go test -race ./...
 
 bench:
-	go test -bench=. -benchtime=3s -benchmem -run=^-memprofile=mem.out ./...
+	go test -bench=. -benchtime=3s -benchmem -run=^$$ -memprofile=mem.out ./...
 
 update-deps:
 	go get -v -u ./...
 	go mod tidy
 
 run:
-	go run ./cmd/app
+	@if [ -z "$(example)" ]; then \
+		echo "Usage: make run example=chan|context|timeout|validate"; \
+		exit 1; \
+	fi
+	go run ./__examples/$(example)
 
 run-container:
 	docker compose down -v
@@ -199,8 +203,8 @@ help:
 	@echo "  vet\t\t\t\tRun go vet and shadow analysis"
 	@echo "  sec\t\t\t\tRun security analysis (govulncheck, gosec)"
 	@echo
-	@echo "  update-deps\t\t\tUpdate all dependencies and tidy go.mod"
-	@echo "  run\t\t\t\tRun the sample application"
+		@echo "  update-deps\t\t\tUpdate all dependencies and tidy go.mod"
+		@echo "  run\t\t\t\tRun an example (make run example=chan)"
 	@echo "  run-container\t\t\tRun the sample application via docker compose"
 	@echo
 	@echo

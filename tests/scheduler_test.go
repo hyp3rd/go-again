@@ -196,6 +196,26 @@ func TestSchedulerURLValidationDisabledAllowsHTTP(t *testing.T) {
 	}
 }
 
+func TestSchedulerScheduleAfterStopReturnsError(t *testing.T) {
+	t.Parallel()
+
+	sched := scheduler.NewScheduler()
+	sched.Stop()
+
+	_, err := sched.Schedule(scheduler.Job{
+		Schedule: scheduler.Schedule{
+			Every: time.Second,
+		},
+		Request: scheduler.Request{
+			Method: http.MethodGet,
+			URL:    "https://example.com",
+		},
+	})
+	if err == nil || !errors.Is(err, scheduler.ErrSchedulerStopped) {
+		t.Fatalf("expected scheduler stopped error, got %v", err)
+	}
+}
+
 func TestSchedulerEndAtInPastStopsImmediately(t *testing.T) {
 	t.Parallel()
 
@@ -291,6 +311,123 @@ func TestSchedulerMaxRunsStops(t *testing.T) {
 	case <-hitCh:
 		t.Fatal("expected scheduler to stop after max runs")
 	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestSchedulerCompletedJobCleanup(t *testing.T) {
+	t.Parallel()
+
+	hitCh := make(chan struct{}, 1)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(targetPath, func(w http.ResponseWriter, _ *http.Request) {
+		select {
+		case hitCh <- struct{}{}:
+		default:
+		}
+
+		w.WriteHeader(http.StatusOK)
+	})
+
+	server := httptest.NewTLSServer(mux)
+	defer server.Close()
+
+	sched := newTLSTestScheduler(t, server)
+
+	jobID, err := sched.Schedule(scheduler.Job{
+		Schedule: scheduler.Schedule{
+			Every:   5 * time.Millisecond,
+			MaxRuns: 1,
+		},
+		Request: scheduler.Request{
+			Method: http.MethodGet,
+			URL:    server.URL + targetPath,
+		},
+	})
+	if err != nil {
+		t.Fatalf(scheduleJobError, err)
+	}
+
+	select {
+	case <-hitCh:
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out waiting for target hit")
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	if sched.Remove(jobID) {
+		t.Fatal("expected completed job to be cleaned up from scheduler state")
+	}
+}
+
+func TestSchedulerConcurrencyLimit(t *testing.T) {
+	t.Parallel()
+
+	startedCh := make(chan struct{}, 2)
+	releaseCh := make(chan struct{})
+
+	var (
+		active    int32
+		maxActive int32
+	)
+
+	handler := newBlockingConcurrencyHandler(startedCh, releaseCh, &active, &maxActive)
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	sched := scheduler.NewScheduler(
+		scheduler.WithConcurrency(1),
+		scheduler.WithURLValidator(nil),
+	)
+	defer sched.Stop()
+	defer close(releaseCh)
+
+	job := scheduler.Job{
+		Schedule: scheduler.Schedule{
+			Every:   time.Second,
+			MaxRuns: 1,
+		},
+		Request: scheduler.Request{
+			Method: http.MethodGet,
+			URL:    server.URL,
+		},
+	}
+
+	for range 2 {
+		_, err := sched.Schedule(job)
+		if err != nil {
+			t.Fatalf(scheduleJobError, err)
+		}
+	}
+
+	select {
+	case <-startedCh:
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out waiting for first request to start")
+	}
+
+	select {
+	case <-startedCh:
+		t.Fatal("expected second request to wait for concurrency slot")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	releaseCh <- struct{}{}
+
+	select {
+	case <-startedCh:
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out waiting for second request to start")
+	}
+
+	releaseCh <- struct{}{}
+
+	time.Sleep(20 * time.Millisecond)
+
+	if got := atomic.LoadInt32(&maxActive); got != 1 {
+		t.Fatalf("expected max concurrent requests 1, got %d", got)
 	}
 }
 
@@ -472,6 +609,41 @@ func newRetryThenSuccessHandler(t *testing.T, targetHits *int32, successOnAttemp
 
 		w.WriteHeader(http.StatusOK)
 		mustWriteResponseBody(t, w, "ok")
+	}
+}
+
+func newBlockingConcurrencyHandler(
+	startedCh chan<- struct{},
+	releaseCh <-chan struct{},
+	active *int32,
+	maxActive *int32,
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		current := atomic.AddInt32(active, 1)
+		updateMaxInt32(maxActive, current)
+
+		select {
+		case startedCh <- struct{}{}:
+		default:
+		}
+
+		<-releaseCh
+
+		atomic.AddInt32(active, -1)
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+func updateMaxInt32(dst *int32, value int32) {
+	for {
+		seen := atomic.LoadInt32(dst)
+		if value <= seen {
+			return
+		}
+
+		if atomic.CompareAndSwapInt32(dst, seen, value) {
+			return
+		}
 	}
 }
 

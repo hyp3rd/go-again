@@ -8,6 +8,8 @@ import (
 var (
 	// ErrInvalidJob is returned when a job fails validation.
 	ErrInvalidJob = errors.New("invalid job")
+	// ErrSchedulerStopped is returned when scheduling is attempted after Stop.
+	ErrSchedulerStopped = errors.New("scheduler stopped")
 	// ErrUnsupportedMethod is returned for unsupported HTTP methods.
 	ErrUnsupportedMethod = errors.New("unsupported method")
 	// ErrRetryableStatus marks responses that should be retried.
