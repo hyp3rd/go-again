@@ -35,10 +35,29 @@ func WithConcurrency(n int) Option {
 	}
 }
 
+// WithHistoryLimit limits the number of per-job execution history entries retained.
+func WithHistoryLimit(limit int) Option {
+	return func(s *Scheduler) {
+		if limit > 0 {
+			s.historyLimit = limit
+		}
+	}
+}
+
+// WithJobsStorage sets the scheduler storage used for active jobs and status/history state.
+func WithJobsStorage(storage JobsStorage) Option {
+	return func(s *Scheduler) {
+		if storage != nil {
+			s.jobsStorage = storage
+		}
+	}
+}
+
 // WithURLValidator sets the URL validator used for request and callback URLs.
 // Pass nil to disable URL validation.
 func WithURLValidator(validator *validate.URLValidator) Option {
 	return func(s *Scheduler) {
+		s.urlValidatorConfigured = true
 		s.urlValidator = validator
 	}
 }

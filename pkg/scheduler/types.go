@@ -60,3 +60,38 @@ type CallbackPayload struct {
 	Error        string    `json:"error,omitempty"`
 	ResponseBody string    `json:"response_body,omitempty"`
 }
+
+// JobState represents the scheduler lifecycle state of a job.
+type JobState string
+
+const (
+	// JobStateScheduled indicates a job is registered and waiting for its next run.
+	JobStateScheduled JobState = "scheduled"
+	// JobStateRunning indicates a job currently has one or more active executions.
+	JobStateRunning JobState = "running"
+	// JobStateCompleted indicates a job completed naturally (for example MaxRuns reached).
+	JobStateCompleted JobState = "completed"
+	// JobStateCanceled indicates a job was canceled before natural completion.
+	JobStateCanceled JobState = "canceled"
+	// JobStateRemoved indicates a job was explicitly removed via Remove.
+	JobStateRemoved JobState = "removed"
+	// JobStateStopped indicates a job was stopped during scheduler shutdown.
+	JobStateStopped JobState = "stopped"
+)
+
+// JobStatus describes the current scheduler status for a job.
+type JobStatus struct {
+	JobID      string
+	State      JobState
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+	Runs       int
+	ActiveRuns int
+	LastRun    *CallbackPayload
+}
+
+// JobRun captures one completed execution result for a job.
+type JobRun struct {
+	Sequence int
+	Payload  CallbackPayload
+}

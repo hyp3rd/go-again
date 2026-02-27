@@ -2,114 +2,36 @@
 
 [![Go](https://github.com/hyp3rd/go-again/actions/workflows/go.yml/badge.svg)][build-link] [![CodeQL](https://github.com/hyp3rd/go-again/actions/workflows/codeql.yml/badge.svg)][codeql-link]
 
-`go-again` **thread safely** wraps a given function and executes it until it returns a nil error or exceeds the maximum number of retries.
-The configuration consists of the maximum number of retries (after the first attempt), the interval, a jitter to add a randomized backoff, the timeout, and a registry to store errors that you consider temporary, hence worth a retry.
+`go-again` provides:
 
-The `Do` method takes a context, a function, and an optional list of `temporary errors` as arguments. If the list is omitted and the registry has entries, the registry is used as the default filter; if the registry is empty, all errors are retried. It supports cancellation from the context and a channel invoking the `Cancel()` function. For long-running operations, use `DoWithContext` and observe cancellation inside the retryable function.
-The returned type is `Errors` which contains the list of errors returned at each attempt and the last error returned by the function.
+- `again`: a thread-safe retry helper with exponential backoff, jitter, timeout, cancellation, hooks, and a temporary-error registry.
+- `pkg/scheduler`: a lightweight HTTP scheduler with pluggable state storage (in-memory by default, SQLite built-in) that reuses the retrier for retryable requests and optional callbacks.
 
-```golang
-// Errors holds the error returned by the retry function along with the trace of each attempt.
-type Errors struct {
-    // Attempts holds the trace of each attempt in order.
-    Attempts []error
-    // Last holds the last error returned by the retry function.
-    Last error
-}
-```
+## Status
 
-When you pass a list of temporary errors to `Do`, retries only happen when the error matches that list. The registry is a convenience store for temporary errors you want to pass to `Do`, or to use as the default filter when the list is omitted:
+As of February 27, 2026, the core retrier hardening work and the scheduler extension described in `PRD.md` are implemented and covered by tests, including race checks.
 
-```go
-    // Init with defaults.
-    retrier, err := again.NewRetrier(context.Background())
-    if err != nil {
-        // handle error
-    }
+## Features
 
-    retrier.Registry.RegisterTemporaryError(http.ErrAbortHandler)
+### Retrier (`github.com/hyp3rd/go-again`)
 
-    defer retrier.Registry.UnRegisterTemporaryError(http.ErrAbortHandler)
+- Configurable `MaxRetries`, `Interval`, `Jitter`, `BackoffFactor`, and `Timeout`
+- `Do` and `DoWithContext` retry APIs
+- Temporary error filtering via explicit error list and/or `Registry`
+- Retry-all behavior when no temporary errors are supplied and the registry is empty
+- Cancellation via caller context and `Retrier.Cancel()` / `Retrier.Stop()`
+- `Errors` trace (`Attempts`, `Last`) plus `Errors.Join()`
+- `DoWithResult[T]` helper
+- Optional `slog` logger and retry hooks
 
-    var retryCount int
+### Scheduler (`github.com/hyp3rd/go-again/pkg/scheduler`)
 
-    errs := retrier.Do(context.TODO(), func() error {
-        retryCount++
-        if retryCount < 3 {
-            return http.ErrAbortHandler
-        }
-
-        return nil
-    }, http.ErrAbortHandler)
-
-    if errs.Last != nil {
-        // handle error
-    }
-```
-
-Should you retry regardless of the error returned, call `Do` without passing any temporary errors and keep the registry empty:
-
-```go
-    var retryCount int
-
-    retrier, err := again.NewRetrier(context.Background(), again.WithTimeout(1*time.Second),
-        again.WithJitter(500*time.Millisecond),
-        again.WithMaxRetries(3))
-
-    if err != nil {
-        // handle error
-    }
-
-    errs := retrier.Do(context.TODO(), func() error {
-        retryCount++
-        if retryCount < 3 {
-            return http.ErrAbortHandler
-        }
-
-        return nil
-    })
-    if errs.Last != nil {
-        // handle error
-    }
-```
-
-For long-running operations, pass a context-aware function:
-
-```go
-    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-    defer cancel()
-
-    errs := retrier.DoWithContext(ctx, func(ctx context.Context) error {
-        // Do work and return ctx.Err() if canceled.
-        return nil
-    })
-    if errs.Last != nil {
-        // handle error
-    }
-```
-
-It's also possible to create a Registry with the [**temporary default errors**](./registry.go?plain=1#L26):
-`retrier.Registry.LoadDefaults()`.
-You can extend the list with your errors by calling the `RegisterTemporaryError` method.
-
-**Walk through the [documentation](https://pkg.go.dev/github.com/hyp3rd/go-again@v1.0.8#section-documentation) for further details about the settings, the programmability, the implementation.**
-
-## Performance
-
-A retrier certainly adds overhead to the execution of a function. `go-again` is designed to produce a minimal impact on the performance of your code, keeping thread safety and flexibility. The following benchmark shows the overhead of a retrier with 5 retries, 1s interval, 10ms jitter, and 1s timeout:
-
-```bash
-go test -bench=. -benchtime=3s -benchmem -run=^-memprofile=mem.out ./...
-?    github.com/hyp3rd/go-again [no test files]
-goos: darwin
-goarch: arm64
-pkg: github.com/hyp3rd/go-again/tests
-cpu: Apple M2 Pro
-BenchmarkRetry-12                12622006       277.6 ns/op       48 B/op        1 allocs/op
-BenchmarkRetryWithRetries-12        93937       38345 ns/op      144 B/op        2 allocs/op
-PASS
-ok   github.com/hyp3rd/go-again/tests 8.498s
-```
+- Interval scheduling with `StartAt`, `EndAt`, and `MaxRuns`
+- HTTP request execution (`GET`, `POST`, `PUT`)
+- Retry integration via `RetryPolicy`
+- Optional callback with bounded response-body capture
+- URL validation by default (via `sectools`) with override/disable support
+- Custom HTTP client, logger, concurrency limit, and scheduler-state storage backend
 
 ## Installation
 
@@ -117,158 +39,388 @@ ok   github.com/hyp3rd/go-again/tests 8.498s
 go get github.com/hyp3rd/go-again
 ```
 
-## Usage
+Requires Go `1.26+` (see `go.mod`).
 
-For examples with cancellation, see [**examples**](__examples). To run the examples you can leverage the `Makefile`:
+## Retrier Quick Start
+
+```go
+package main
+
+import (
+ "context"
+ "errors"
+ "fmt"
+ "net/http"
+ "time"
+
+ again "github.com/hyp3rd/go-again"
+)
+
+func main() {
+ retrier, err := again.NewRetrier(
+  context.Background(),
+  again.WithMaxRetries(3),                 // retries after the first attempt
+  again.WithInterval(100*time.Millisecond),
+  again.WithJitter(50*time.Millisecond),
+  again.WithTimeout(2*time.Second),
+ )
+ if err != nil {
+  panic(err)
+ }
+
+ retrier.Registry.LoadDefaults()
+ retrier.Registry.RegisterTemporaryError(http.ErrAbortHandler)
+
+ var attempts int
+ errs := retrier.Do(context.Background(), func() error {
+  attempts++
+  if attempts < 3 {
+   return http.ErrAbortHandler
+  }
+
+  return nil
+ })
+ defer retrier.PutErrors(errs)
+
+ if errs.Last != nil {
+  fmt.Println("failed:", errs.Last)
+  return
+ }
+
+ fmt.Println("success after attempts:", attempts)
+ _ = errors.Join(errs.Attempts...) // equivalent to errs.Join()
+}
+```
+
+### Retrier Notes
+
+- `MaxRetries` counts retries after the first attempt (`total attempts = MaxRetries + 1`).
+- If `temporaryErrors` is omitted and `Registry` has entries, the registry is used as the retry filter.
+- If `temporaryErrors` is omitted and the registry is empty, all errors are retried until success/timeout/cancel/max-retries.
+- `Do` checks cancellation between attempts. For long-running work, use `DoWithContext`.
+- `Cancel()` and `Stop()` cancel the retrier's internal lifecycle context; they are terminal for that retrier instance.
+
+## Context-Aware Retrying
+
+Use `DoWithContext` when the operation itself accepts a context and should stop promptly on cancellation:
+
+```go
+// assuming `retrier` was created as in the previous example
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+
+errs := retrier.DoWithContext(ctx, func(ctx context.Context) error {
+ select {
+ case <-time.After(250 * time.Millisecond):
+  return nil
+ case <-ctx.Done():
+  return ctx.Err()
+ }
+})
+defer retrier.PutErrors(errs)
+```
+
+The retryable function should observe `ctx.Done()`; if it ignores context cancellation, the work may continue running after the retrier returns.
+
+## Scheduler Quick Start
+
+The scheduler runs jobs immediately when scheduled (or at `StartAt` if set), then continues every `Schedule.Every` until `MaxRuns`, `EndAt`, removal, or `Stop()`.
+
+Request and callback URLs are validated by default using `sectools` (HTTPS only, no userinfo, and no private/localhost hosts unless configured otherwise).
+
+```go
+package main
+
+import (
+ "context"
+ "net/http"
+ "time"
+
+ again "github.com/hyp3rd/go-again"
+ "github.com/hyp3rd/go-again/pkg/scheduler"
+)
+
+func main() {
+ retrier, _ := again.NewRetrier(
+  context.Background(),
+  again.WithMaxRetries(5),
+  again.WithInterval(10*time.Millisecond),
+  again.WithJitter(10*time.Millisecond),
+  again.WithTimeout(5*time.Second),
+ )
+
+ s := scheduler.NewScheduler(
+  scheduler.WithConcurrency(8),
+ )
+ defer s.Stop()
+
+_, _ = s.Schedule(scheduler.Job{
+  Schedule: scheduler.Schedule{
+   Every:   1 * time.Minute,
+   MaxRuns: 1,
+  },
+  Request: scheduler.Request{
+   Method: http.MethodPost,
+   URL:    "https://example.com/endpoint",
+   Body:   []byte(`{"ping":"pong"}`),
+  },
+  Callback: scheduler.Callback{
+   URL: "https://example.com/callback",
+  },
+  RetryPolicy: scheduler.RetryPolicy{
+   Retrier:          retrier,
+   RetryStatusCodes: []int{http.StatusTooManyRequests, http.StatusInternalServerError},
+ },
+})
+}
+```
+
+## Scheduler Examples
+
+### Example: Schedule Once + Callback
+
+Runnable version:
 
 ```bash
-make run example=chan
-make run example=context
+go run ./__examples/scheduler
 ```
-
-### Retrier
 
 ```go
 package main
 
 import (
-    "context"
-    "errors"
-    "fmt"
-    "time"
+ "encoding/json"
+ "fmt"
+ "net/http"
+ "net/http/httptest"
+ "time"
 
-    "github.com/hyp3rd/ewrap"
-
-    "github.com/hyp3rd/go-again"
+ "github.com/hyp3rd/go-again/pkg/scheduler"
 )
 
 func main() {
-    // Create a new retrier.
-    retrier, err := again.NewRetrier(context.Background(), again.WithTimeout(1*time.Second),
-        again.WithJitter(500*time.Millisecond),
-        again.WithMaxRetries(3))
+ callbackCh := make(chan scheduler.CallbackPayload, 1)
 
-    if err != nil {
-        // handle error
-    }
+ mux := http.NewServeMux()
+ mux.HandleFunc("/target", func(w http.ResponseWriter, _ *http.Request) {
+  w.WriteHeader(http.StatusOK)
+ })
+ mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
+  defer r.Body.Close()
 
-    // Register a temporary error.
-    tempErr := ewrap.New("temporary error")
-    retrier.Registry.RegisterTemporaryError(tempErr)
+  var payload scheduler.CallbackPayload
+  _ = json.NewDecoder(r.Body).Decode(&payload)
+  callbackCh <- payload
+  w.WriteHeader(http.StatusOK)
+ })
 
-    // Retry a function.
-    errs := retrier.Do(context.TODO(), func() error {
-        // Do something here.
-        return tempErr
-    }, tempErr)
-    if errs.Last != nil {
-        // handle error
-    }
+ server := httptest.NewTLSServer(mux)
+ defer server.Close()
+
+ s := scheduler.NewScheduler(
+  scheduler.WithHTTPClient(server.Client()),
+  scheduler.WithURLValidator(nil), // allow local http(s) in this example
+ )
+ defer s.Stop()
+
+ jobID, err := s.Schedule(scheduler.Job{
+  Schedule: scheduler.Schedule{Every: 10 * time.Millisecond, MaxRuns: 1},
+  Request: scheduler.Request{
+   Method: http.MethodGet,
+   URL:    server.URL + "/target",
+  },
+  Callback: scheduler.Callback{
+   URL: server.URL + "/callback",
+  },
+ })
+ if err != nil {
+  panic(err)
+ }
+
+ select {
+ case payload := <-callbackCh:
+  fmt.Println("job:", jobID, "success:", payload.Success, "status:", payload.StatusCode)
+ case <-time.After(2 * time.Second):
+  panic("timed out waiting for callback")
+ }
 }
 ```
 
-### Scheduler
+### Example: Query Status and History
 
-The scheduler runs HTTP requests on an interval and posts results to a callback URL. Request and callback URLs are
-validated with `sectools` (HTTPS only, no userinfo, and no private/localhost hosts by default). To customize or disable
-validation, pass `WithURLValidator` (use `nil` to disable validation).
+```go
+// after Schedule(...)
+status, ok := s.JobStatus(jobID)
+if ok {
+ fmt.Println("state:", status.State, "runs:", status.Runs, "active:", status.ActiveRuns)
+}
+
+history, ok := s.JobHistory(jobID)
+if ok {
+ for _, run := range history {
+  fmt.Println("run#", run.Sequence, "status:", run.Payload.StatusCode, "success:", run.Payload.Success)
+ }
+}
+```
+
+### Example: Durable Scheduler State with SQLite
+
+Runnable version:
+
+```bash
+go run ./__examples/scheduler_sqlite
+```
 
 ```go
 package main
 
 import (
-    "context"
-    "net/http"
-    "time"
+ "fmt"
+ "net/http"
+ "path/filepath"
+ "time"
 
-    "github.com/hyp3rd/go-again"
-    "github.com/hyp3rd/go-again/pkg/scheduler"
+ "github.com/hyp3rd/go-again/pkg/scheduler"
 )
 
 func main() {
-    retrier, _ := again.NewRetrier(
-        context.Background(),
-        again.WithMaxRetries(5),
-        again.WithInterval(10*time.Millisecond),
-        again.WithJitter(10*time.Millisecond),
-        again.WithTimeout(5*time.Second),
-    )
+ dbPath := filepath.Join(".", "scheduler-state.db")
 
-    s := scheduler.NewScheduler()
-    defer s.Stop()
+ storage, err := scheduler.NewSQLiteJobsStorage(dbPath)
+ if err != nil {
+  panic(err)
+ }
+ defer storage.Close()
 
-    _, _ = s.Schedule(scheduler.Job{
-        Schedule: scheduler.Schedule{
-            Every:   1 * time.Minute,
-            MaxRuns: 1,
-        },
-        Request: scheduler.Request{
-            Method: http.MethodPost,
-            URL:    "https://example.com/endpoint",
-        },
-        Callback: scheduler.Callback{
-            URL: "https://example.com/callback",
-        },
-        RetryPolicy: scheduler.RetryPolicy{
-            Retrier:          retrier,
-            RetryStatusCodes: []int{http.StatusTooManyRequests, http.StatusInternalServerError},
-        },
-    })
+ s := scheduler.NewScheduler(
+  scheduler.WithJobsStorage(storage),
+  scheduler.WithURLValidator(nil),
+ )
+ defer s.Stop()
+
+ jobID, err := s.Schedule(scheduler.Job{
+  Schedule: scheduler.Schedule{Every: time.Minute, MaxRuns: 1},
+  Request: scheduler.Request{
+   Method: http.MethodGet,
+   URL:    "https://example.com/health",
+  },
+ })
+ if err != nil {
+  panic(err)
+ }
+
+ fmt.Println("scheduled job:", jobID)
 }
 ```
 
-Supported methods for request and callback: `GET`, `POST`, `PUT`. If the callback URL is empty, no callback is sent.
+### Example: Fail-Closed Scheduler Construction
 
-To relax URL validation for local HTTPS targets (localhost/private IPs):
+Use `NewSchedulerWithError(...)` when constructor-time URL validator initialization errors must fail startup.
 
 ```go
-import (
-    "github.com/hyp3rd/go-again/pkg/scheduler"
-    "github.com/hyp3rd/sectools/pkg/validate"
+s, err := scheduler.NewSchedulerWithError(
+ scheduler.WithConcurrency(8),
 )
+if err != nil {
+ // fail startup instead of warning + degraded mode
+ return err
+}
+defer s.Stop()
+```
 
+### Scheduler Options
+
+- `WithHTTPClient(client)` sets the HTTP client used for requests and callbacks.
+- `WithLogger(logger)` sets the scheduler logger.
+- `WithConcurrency(n)` limits concurrent executions when `n > 0`.
+- `WithJobsStorage(storage)` sets pluggable scheduler state storage (active jobs plus status/history; default: in-memory).
+- `WithHistoryLimit(limit)` sets retained per-job history length (default `20`).
+- `WithURLValidator(validator)` overrides URL validation. Pass `nil` to disable validation.
+- `NewSchedulerWithError(...)` returns constructor errors (including default URL validator initialization failure).
+
+### Scheduler Behavior Notes
+
+- Supported methods for requests and callbacks: `GET`, `POST`, `PUT`.
+- Callbacks are skipped when `Callback.URL` is empty.
+- Callback method defaults to `POST`.
+- `Callback.MaxBodyBytes` defaults to `4096`.
+- `Request.Timeout` and `Callback.Timeout` apply per HTTP request/callback (not the schedule lifetime).
+- If `RetryPolicy.Retrier` is nil, the scheduler creates a default retrier and loads registry defaults.
+- Calling `Schedule` after `Stop()` returns `scheduler.ErrSchedulerStopped`.
+- `Schedule` returns `scheduler.ErrStorageOperation` when required scheduler-state persistence fails.
+- `NewSchedulerWithError(...)` should be preferred for fail-closed startup behavior in security-sensitive paths.
+- `JobCount()` and `JobIDs()` provide lightweight read-only scheduler introspection.
+- `JobStatus(id)`, `JobStatuses()`, and `JobHistory(id)` provide status and retained run history snapshots.
+- Default `InMemoryJobsStorage` is process-local; use `WithJobsStorage(...)` for custom durable/backed storage.
+- `NewSQLiteJobsStorage(path)` provides a built-in durable storage implementation for `WithJobsStorage(...)`; call `Close()` when finished.
+- Non-fatal storage write failures during runtime transitions are logged (warn) and execution continues.
+- `NewScheduler()` logs a warning and continues if default URL validator initialization fails; use `NewSchedulerWithError()` to fail closed.
+
+### Custom URL Validation (Allow Local HTTPS)
+
+```go
 validator, _ := validate.NewURLValidator(
-    validate.WithURLAllowPrivateIP(true),
-    validate.WithURLAllowLocalhost(true),
-    validate.WithURLAllowIPLiteral(true),
+ validate.WithURLAllowPrivateIP(true),
+ validate.WithURLAllowLocalhost(true),
+ validate.WithURLAllowIPLiteral(true),
 )
 
 s := scheduler.NewScheduler(
-    scheduler.WithURLValidator(validator),
+ scheduler.WithURLValidator(validator),
 )
 ```
 
-To allow non-HTTPS endpoints, disable validation entirely:
+### Disable URL Validation (Allow Non-HTTPS)
 
 ```go
 s := scheduler.NewScheduler(
-    scheduler.WithURLValidator(nil),
+ scheduler.WithURLValidator(nil),
 )
 ```
 
-#### Scheduler Options
+## Examples
 
-- `WithHTTPClient` uses a custom HTTP client for requests and callbacks.
-- `WithLogger` sets the `slog.Logger` used for scheduler warnings.
-- `WithConcurrency` limits concurrent executions.
-- `WithURLValidator` sets the URL validator (pass `nil` to disable).
+Run the example programs directly:
 
-#### Schedule Fields
+```bash
+go run ./__examples/chan
+go run ./__examples/context
+go run ./__examples/scheduler
+go run ./__examples/scheduler_sqlite
+go run ./__examples/timeout
+go run ./__examples/validate
+```
 
-- `Every` is required.
-- `StartAt` and `EndAt` are optional time bounds.
-- `MaxRuns` caps the number of scheduled executions when > 0.
+## Development Commands
 
-#### Retry Policy
+```bash
+make test
+make test-race
+make lint
+make sec
+```
 
-- `RetryStatusCodes` marks response codes as retryable.
-- `TemporaryErrors` adds retryable error types.
-- If `Retrier` is nil, a default retrier is created and registry defaults are loaded.
+Benchmark (direct Go command):
 
-#### Callback Payload
+```bash
+go test -bench=. -benchtime=3s -benchmem -run=^$ -memprofile=mem.out ./...
+```
 
-- Fields: `job_id`, `scheduled_at`, `started_at`, `finished_at`, `attempts`, `success`, `status_code`, `error`, `response_body`.
-- `response_body` is limited by `Callback.MaxBodyBytes` (defaults to 4096).
+## Known Limitations / Gaps
+
+- `Scheduler.Stop()` cancels the scheduler lifecycle; the same instance is not intended to be reused afterward.
+- `Retrier.Cancel()` / `Retrier.Stop()` are terminal for the retrier instance.
+- `DoWithContext` can only stop work promptly if the retryable function respects the provided context.
+- `NewScheduler()` (non-error constructor) intentionally degrades to warning-only behavior if default URL validator initialization fails; use `NewSchedulerWithError()` when you need constructor-time failure.
+
+## Performance
+
+`go-again` adds retry orchestration overhead but is designed to keep allocations low. See the benchmark in `tests/retrier_test.go` and run the benchmark command above in your environment for current numbers.
+
+## Documentation
+
+- API docs: <https://pkg.go.dev/github.com/hyp3rd/go-again>
+- Product/status notes: `PRD.md`
 
 ## License
 

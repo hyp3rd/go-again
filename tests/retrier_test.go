@@ -18,6 +18,7 @@ var errTemporary = ewrap.New("temporary error")
 const (
 	errRetryCountMismatch = "retry did not retry the function the expected number of times. Got: %d, Expecting: %d"
 	errNonTemporary       = "non-temporary error"
+	errUnexpectedError    = "unexpected error: %v"
 	defaultBackoffFactor  = 3
 	defaultRetryCount     = 3
 	defaultMaxRetries     = 5
@@ -206,7 +207,7 @@ func TestDo(t *testing.T) {
 
 	errs := retrier.Do(context.Background(), retryableFunc)
 	if errs.Last != nil {
-		t.Errorf("unexpected error: %v", errs.Last)
+		t.Errorf(errUnexpectedError, errs.Last)
 	}
 
 	// Test non-temporary error.
@@ -244,7 +245,7 @@ func TestDo(t *testing.T) {
 
 	errs = retrier.Do(context.Background(), retryableFunc, customError)
 	if errs.Last == nil || errs.Last.Error() != "temporary error" {
-		t.Errorf("unexpected error: %v", errs.Last)
+		t.Errorf(errUnexpectedError, errs.Last)
 	}
 
 	// Test max retries.
@@ -336,6 +337,67 @@ func TestDo_MaxRetriesCountsRetries(t *testing.T) {
 	}
 }
 
+func TestRetrierHooksOnRetry(t *testing.T) {
+	t.Parallel()
+
+	tempErr := errTemporary
+
+	var (
+		attempts     int
+		hookAttempts []int
+		hookErrors   []error
+	)
+
+	retrier, err := again.NewRetrier(
+		context.Background(),
+		again.WithMaxRetries(defaultRetryCount),
+		again.WithInterval(1*time.Millisecond),
+		again.WithJitter(1*time.Millisecond),
+		again.WithTimeout(500*time.Millisecond),
+		again.WithHooks(again.Hooks{
+			OnRetry: func(attempt int, hookErr error) {
+				hookAttempts = append(hookAttempts, attempt)
+				hookErrors = append(hookErrors, hookErr)
+			},
+		}),
+	)
+	if err != nil {
+		t.Fatalf(errFailedToCreateRetrier, err)
+	}
+
+	errs := retrier.Do(context.Background(), func() error {
+		attempts++
+		if attempts < 3 {
+			return tempErr
+		}
+
+		return nil
+	}, tempErr)
+	defer retrier.PutErrors(errs)
+
+	if errs.Last != nil {
+		t.Fatalf(errUnexpectedError, errs.Last)
+	}
+
+	if attempts != defaultRetryCount {
+		t.Fatalf("expected 3 attempts, got %d", attempts)
+	}
+
+	if len(hookAttempts) != 2 {
+		t.Fatalf("expected 2 hook calls, got %d", len(hookAttempts))
+	}
+
+	if hookAttempts[0] != 0 || hookAttempts[1] != 1 {
+		t.Fatalf("unexpected hook attempts: %v", hookAttempts)
+	}
+
+	for i, hookErr := range hookErrors {
+		if !errors.Is(hookErr, tempErr) {
+			t.Fatalf("expected hook error %d to match %v, got %v", i, tempErr, hookErr)
+		}
+	}
+}
+
 func TestDoWithContext_Cancel(t *testing.T) {
 	t.Parallel()
 
@@ -370,7 +432,7 @@ func TestStopRetries(t *testing.T) {
 	// Create a new Retrier with a small interval to speed up the test.
 	retrier, err := again.NewRetrier(context.Background(), again.WithInterval(10*time.Millisecond), again.WithTimeout(5*time.Second))
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf(errUnexpectedError, err)
 	}
 
 	// Use a context with a timeout to cancel the retries after 1500 milliseconds.
