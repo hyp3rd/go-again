@@ -185,65 +185,27 @@ Runnable version:
 go run ./__examples/scheduler
 ```
 
+Source:
+[`__examples/scheduler/scheduler.go`](__examples/scheduler/scheduler.go)
+
 ```go
-package main
-
-import (
- "encoding/json"
- "fmt"
- "net/http"
- "net/http/httptest"
- "time"
-
- "github.com/hyp3rd/go-again/pkg/scheduler"
+s := scheduler.NewScheduler(
+ scheduler.WithHTTPClient(server.Client()),
+ scheduler.WithURLValidator(nil), // allow local endpoints for example usage
 )
+defer s.Stop()
 
-func main() {
- callbackCh := make(chan scheduler.CallbackPayload, 1)
-
- mux := http.NewServeMux()
- mux.HandleFunc("/target", func(w http.ResponseWriter, _ *http.Request) {
-  w.WriteHeader(http.StatusOK)
- })
- mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
-  defer r.Body.Close()
-
-  var payload scheduler.CallbackPayload
-  _ = json.NewDecoder(r.Body).Decode(&payload)
-  callbackCh <- payload
-  w.WriteHeader(http.StatusOK)
- })
-
- server := httptest.NewTLSServer(mux)
- defer server.Close()
-
- s := scheduler.NewScheduler(
-  scheduler.WithHTTPClient(server.Client()),
-  scheduler.WithURLValidator(nil), // allow local http(s) in this example
- )
- defer s.Stop()
-
- jobID, err := s.Schedule(scheduler.Job{
-  Schedule: scheduler.Schedule{Every: 10 * time.Millisecond, MaxRuns: 1},
-  Request: scheduler.Request{
-   Method: http.MethodGet,
-   URL:    server.URL + "/target",
-  },
-  Callback: scheduler.Callback{
-   URL: server.URL + "/callback",
-  },
- })
- if err != nil {
-  panic(err)
- }
-
- select {
- case payload := <-callbackCh:
-  fmt.Println("job:", jobID, "success:", payload.Success, "status:", payload.StatusCode)
- case <-time.After(2 * time.Second):
-  panic("timed out waiting for callback")
- }
+jobID, err := s.Schedule(scheduler.Job{
+ Schedule: scheduler.Schedule{Every: 10 * time.Millisecond, MaxRuns: 1},
+ Request: scheduler.Request{Method: http.MethodGet, URL: server.URL + "/target"},
+ Callback: scheduler.Callback{URL: server.URL + "/callback"},
+})
+if err != nil {
+ panic(err)
 }
+
+payload := <-callbackCh
+fmt.Println("job:", jobID, "success:", payload.Success, "status:", payload.StatusCode)
 ```
 
 ### Example: Query Status and History
@@ -271,46 +233,31 @@ Runnable version:
 go run ./__examples/scheduler_sqlite
 ```
 
+Source:
+[`__examples/scheduler_sqlite/scheduler_sqlite.go`](__examples/scheduler_sqlite/scheduler_sqlite.go)
+
 ```go
-package main
-
-import (
- "fmt"
- "net/http"
- "path/filepath"
- "time"
-
- "github.com/hyp3rd/go-again/pkg/scheduler"
-)
-
-func main() {
- dbPath := filepath.Join(".", "scheduler-state.db")
-
- storage, err := scheduler.NewSQLiteJobsStorage(dbPath)
- if err != nil {
-  panic(err)
- }
- defer storage.Close()
-
- s := scheduler.NewScheduler(
-  scheduler.WithJobsStorage(storage),
-  scheduler.WithURLValidator(nil),
- )
- defer s.Stop()
-
- jobID, err := s.Schedule(scheduler.Job{
-  Schedule: scheduler.Schedule{Every: time.Minute, MaxRuns: 1},
-  Request: scheduler.Request{
-   Method: http.MethodGet,
-   URL:    "https://example.com/health",
-  },
- })
- if err != nil {
-  panic(err)
- }
-
- fmt.Println("scheduled job:", jobID)
+dbPath := filepath.Join(os.TempDir(), "go-again-scheduler-example.db")
+storage, err := scheduler.NewSQLiteJobsStorage(dbPath)
+if err != nil {
+ panic(err)
 }
+defer storage.Close()
+
+s := scheduler.NewScheduler(
+ scheduler.WithJobsStorage(storage),
+ scheduler.WithURLValidator(nil),
+)
+defer s.Stop()
+
+jobID, err := s.Schedule(scheduler.Job{
+ Schedule: scheduler.Schedule{Every: 20 * time.Millisecond, MaxRuns: 1},
+ Request: scheduler.Request{Method: http.MethodGet, URL: target.URL},
+})
+if err != nil {
+ panic(err)
+}
+fmt.Println("scheduled job:", jobID)
 ```
 
 ### Example: Fail-Closed Scheduler Construction

@@ -3,13 +3,13 @@ package scheduler
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/goccy/go-json"
 	"github.com/hyp3rd/ewrap"
 
 	_ "modernc.org/sqlite" // SQLite database/sql driver.

@@ -1,12 +1,13 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"time"
+
+	"github.com/goccy/go-json"
 
 	"github.com/hyp3rd/go-again/pkg/scheduler"
 )
