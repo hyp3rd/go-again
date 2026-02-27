@@ -25,6 +25,7 @@ import (
 const (
 	defaultCallbackMethod      = http.MethodPost
 	defaultCallbackMaxBodySize = 4096
+	defaultHistoryLimit        = 20
 )
 
 //nolint:gochecknoglobals // test seam for simulating default validator initialization failures.
@@ -41,6 +42,8 @@ type jobEntry struct {
 type Scheduler struct {
 	mu           sync.Mutex
 	jobs         map[string]*jobEntry
+	jobsStorage  JobsStorage
+	historyLimit int
 	client       *http.Client
 	logger       *slog.Logger
 	sem          chan struct{}
@@ -74,11 +77,13 @@ func NewScheduler(opts ...Option) *Scheduler {
 func NewSchedulerWithError(opts ...Option) (*Scheduler, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	schedulerInstance := &Scheduler{
-		jobs:   make(map[string]*jobEntry),
-		client: http.DefaultClient,
-		logger: slog.Default(),
-		ctx:    ctx,
-		cancel: cancel,
+		jobs:         make(map[string]*jobEntry),
+		jobsStorage:  NewInMemoryJobsStorage(),
+		historyLimit: defaultHistoryLimit,
+		client:       http.DefaultClient,
+		logger:       slog.Default(),
+		ctx:          ctx,
+		cancel:       cancel,
 	}
 
 	for _, opt := range opts {
@@ -118,7 +123,23 @@ func (s *Scheduler) Schedule(job Job) (string, error) {
 	}
 
 	if _, exists := s.jobs[normalized.ID]; exists {
-		return "", fmt.Errorf("%w: job id already exists: %s", ErrInvalidJob, normalized.ID)
+		return "", ewrap.Wrapf(ErrInvalidJob, "job id already exists: %s", normalized.ID)
+	}
+
+	err = s.jobsStorage.Save(normalized)
+	if err != nil {
+		if errors.Is(err, errJobAlreadyExists) {
+			return "", ewrap.Wrapf(ErrInvalidJob, "job id already exists: %s", normalized.ID)
+		}
+
+		return "", ewrap.Wrapf(ErrStorageOperation, "job storage save failed: %v", err)
+	}
+
+	err = s.jobsStorage.UpsertStatus(normalized.ID, JobStateScheduled)
+	if err != nil {
+		_ = s.jobsStorage.Delete(normalized.ID)
+
+		return "", ewrap.Wrapf(ErrStorageOperation, "job status upsert failed: %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(s.ctx)
@@ -147,6 +168,12 @@ func (s *Scheduler) Remove(id string) bool {
 
 	entry.cancel()
 	delete(s.jobs, id)
+	_ = s.jobsStorage.Delete(id)
+
+	err := s.jobsStorage.MarkRemoved(id)
+	if err != nil {
+		s.logStorageWriteFailure("mark removed", id, err)
+	}
 
 	return true
 }
@@ -166,6 +193,12 @@ func (s *Scheduler) Stop() {
 
 	for _, entry := range s.jobs {
 		entry.cancel()
+		_ = s.jobsStorage.Delete(entry.job.ID)
+
+		err := s.jobsStorage.MarkTerminal(entry.job.ID, JobStateStopped)
+		if err != nil {
+			s.logStorageWriteFailure("mark stopped", entry.job.ID, err)
+		}
 	}
 
 	s.jobs = make(map[string]*jobEntry)
@@ -176,25 +209,27 @@ func (s *Scheduler) Stop() {
 
 // JobCount returns the number of jobs currently registered in the scheduler.
 func (s *Scheduler) JobCount() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	return len(s.jobs)
+	return s.jobsStorage.Count()
 }
 
 // JobIDs returns the currently registered job IDs in sorted order.
 func (s *Scheduler) JobIDs() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	return s.jobsStorage.IDs()
+}
 
-	ids := make([]string, 0, len(s.jobs))
-	for id := range s.jobs {
-		ids = append(ids, id)
-	}
+// JobStatus returns the latest known status for a job.
+func (s *Scheduler) JobStatus(id string) (JobStatus, bool) {
+	return s.jobsStorage.Status(id)
+}
 
-	slices.Sort(ids)
+// JobStatuses returns all known job statuses sorted by job ID.
+func (s *Scheduler) JobStatuses() []JobStatus {
+	return s.jobsStorage.Statuses()
+}
 
-	return ids
+// JobHistory returns retained execution history for a job.
+func (s *Scheduler) JobHistory(id string) ([]JobRun, bool) {
+	return s.jobsStorage.History(id)
 }
 
 func (s *Scheduler) nextID() string {
@@ -233,15 +268,15 @@ func (s *Scheduler) normalizeJob(job Job) (Job, error) {
 
 func validateSchedule(schedule Schedule) error {
 	if schedule.Every <= 0 {
-		return fmt.Errorf("%w: schedule interval must be > 0", ErrInvalidJob)
+		return ewrap.Wrap(ErrInvalidJob, "schedule interval must be > 0")
 	}
 
 	if schedule.MaxRuns < 0 {
-		return fmt.Errorf("%w: max runs must be >= 0", ErrInvalidJob)
+		return ewrap.Wrap(ErrInvalidJob, "max runs must be >= 0")
 	}
 
 	if !schedule.EndAt.IsZero() && !schedule.StartAt.IsZero() && schedule.EndAt.Before(schedule.StartAt) {
-		return fmt.Errorf("%w: end time precedes start time", ErrInvalidJob)
+		return ewrap.Wrap(ErrInvalidJob, "end time precedes start time")
 	}
 
 	return nil
@@ -249,7 +284,7 @@ func validateSchedule(schedule Schedule) error {
 
 func (s *Scheduler) normalizeRequest(request Request) (Request, error) {
 	if request.URL == "" {
-		return Request{}, fmt.Errorf("%w: request URL is required", ErrInvalidJob)
+		return Request{}, ewrap.Wrap(ErrInvalidJob, "request URL is required")
 	}
 
 	if request.Method == "" {
@@ -258,13 +293,13 @@ func (s *Scheduler) normalizeRequest(request Request) (Request, error) {
 
 	request.Method = strings.ToUpper(request.Method)
 	if !isSupportedMethod(request.Method) {
-		return Request{}, fmt.Errorf("%w: %s", ErrUnsupportedMethod, request.Method)
+		return Request{}, ewrap.Wrap(ErrUnsupportedMethod, request.Method)
 	}
 
 	if s.urlValidator != nil {
 		result, err := s.urlValidator.Validate(s.ctx, request.URL)
 		if err != nil {
-			return Request{}, fmt.Errorf("%w: request URL invalid: %w", ErrInvalidJob, err)
+			return Request{}, ewrap.Wrap(ErrInvalidJob, fmt.Sprintf("request URL invalid: %v", err))
 		}
 
 		request.URL = result.NormalizedURL
@@ -284,13 +319,13 @@ func (s *Scheduler) normalizeCallback(callback Callback) (Callback, error) {
 
 	callback.Method = strings.ToUpper(callback.Method)
 	if !isSupportedMethod(callback.Method) {
-		return Callback{}, fmt.Errorf("%w: %s", ErrUnsupportedMethod, callback.Method)
+		return Callback{}, ewrap.Wrap(ErrUnsupportedMethod, callback.Method)
 	}
 
 	if s.urlValidator != nil {
 		result, err := s.urlValidator.Validate(s.ctx, callback.URL)
 		if err != nil {
-			return Callback{}, fmt.Errorf("%w: callback URL invalid: %w", ErrInvalidJob, err)
+			return Callback{}, ewrap.Wrap(ErrInvalidJob, fmt.Sprintf("callback URL invalid: %v", err))
 		}
 
 		callback.URL = result.NormalizedURL
@@ -310,7 +345,7 @@ func ensureRetrier(job *Job) error {
 
 	retrier, err := again.NewRetrier(context.Background())
 	if err != nil {
-		return fmt.Errorf("%w: %w", ErrInvalidJob, err)
+		return ewrap.Wrap(ErrInvalidJob, fmt.Sprintf("failed to create retrier: %v", err))
 	}
 
 	retrier.Registry.LoadDefaults()
@@ -325,8 +360,16 @@ func (s *Scheduler) runJob(ctx context.Context, entry *jobEntry) {
 
 	job := entry.job
 
+	terminalState := JobStateCompleted
+
+	defer func() {
+		s.finalizeJobState(job.ID, terminalState)
+	}()
+
 	if !job.Schedule.StartAt.IsZero() {
 		if !s.waitUntil(ctx, job.Schedule.StartAt) {
+			terminalState = s.contextTerminalState(job.ID)
+
 			return
 		}
 	}
@@ -338,6 +381,8 @@ func (s *Scheduler) runJob(ctx context.Context, entry *jobEntry) {
 
 	for {
 		if ctx.Err() != nil {
+			terminalState = s.contextTerminalState(job.ID)
+
 			return
 		}
 
@@ -371,6 +416,7 @@ func (s *Scheduler) cleanupJob(entry *jobEntry) {
 	}
 
 	delete(s.jobs, entry.job.ID)
+	_ = s.jobsStorage.Delete(entry.job.ID)
 }
 
 func (*Scheduler) waitUntil(ctx context.Context, when time.Time) bool {
@@ -405,6 +451,8 @@ func (s *Scheduler) enqueue(ctx context.Context, job Job, scheduledAt time.Time)
 }
 
 func (s *Scheduler) execute(ctx context.Context, job Job, scheduledAt time.Time) {
+	s.markExecutionStart(job.ID)
+
 	startedAt := time.Now()
 	retrier := job.RetryPolicy.Retrier
 	temporaryErrors := s.buildTemporaryErrors(retrier, job.RetryPolicy)
@@ -452,7 +500,7 @@ func (s *Scheduler) execute(ctx context.Context, job Job, scheduledAt time.Time)
 		}
 
 		if isRetryableStatus(resp.StatusCode, job.RetryPolicy.RetryStatusCodes) {
-			return fmt.Errorf("%w: status %d", ErrRetryableStatus, resp.StatusCode)
+			return ewrap.Wrapf(ErrRetryableStatus, "status %d", resp.StatusCode)
 		}
 
 		return &StatusError{StatusCode: resp.StatusCode}
@@ -461,7 +509,7 @@ func (s *Scheduler) execute(ctx context.Context, job Job, scheduledAt time.Time)
 	snapshot := state.snapshot()
 
 	finishedAt := time.Now()
-	s.sendCallback(ctx, job, CallbackPayload{
+	payload := CallbackPayload{
 		JobID:        job.ID,
 		ScheduledAt:  scheduledAt,
 		StartedAt:    startedAt,
@@ -471,7 +519,10 @@ func (s *Scheduler) execute(ctx context.Context, job Job, scheduledAt time.Time)
 		StatusCode:   snapshot.status,
 		Error:        errorString(errs.Last),
 		ResponseBody: string(snapshot.body),
-	})
+	}
+
+	s.recordExecutionResult(job.ID, payload)
+	s.sendCallback(ctx, job, payload)
 }
 
 type executionState struct {
@@ -639,6 +690,51 @@ func (s *Scheduler) logError(msg string, err error) {
 	}
 
 	s.logger.Log(s.ctx, slog.LevelWarn, msg, slog.Any("error", err))
+}
+
+func (s *Scheduler) finalizeJobState(id string, state JobState) {
+	err := s.jobsStorage.MarkTerminal(id, state)
+	if err != nil {
+		s.logStorageWriteFailure("mark terminal", id, err)
+	}
+}
+
+func (s *Scheduler) contextTerminalState(id string) JobState {
+	s.mu.Lock()
+	stopped := s.stopped
+	s.mu.Unlock()
+
+	state, ok := s.jobsStorage.State(id)
+	if ok && state == JobStateRemoved {
+		return JobStateRemoved
+	}
+
+	if stopped {
+		return JobStateStopped
+	}
+
+	return JobStateCanceled
+}
+
+func (s *Scheduler) markExecutionStart(id string) {
+	err := s.jobsStorage.MarkExecutionStart(id)
+	if err != nil {
+		s.logStorageWriteFailure("mark execution start", id, err)
+	}
+}
+
+func (s *Scheduler) recordExecutionResult(id string, payload CallbackPayload) {
+	err := s.jobsStorage.RecordExecutionResult(id, payload, s.historyLimit)
+	if err != nil {
+		s.logStorageWriteFailure("record execution result", id, err)
+	}
+}
+
+func (s *Scheduler) logStorageWriteFailure(operation, id string, err error) {
+	s.logError(
+		"scheduler storage write failed",
+		ewrap.Wrapf(err, "operation=%s job_id=%s", operation, id),
+	)
 }
 
 func isRetryableStatus(code int, statuses []int) bool {

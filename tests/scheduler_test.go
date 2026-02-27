@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hyp3rd/ewrap"
 	"github.com/hyp3rd/sectools/pkg/validate"
 
 	"github.com/hyp3rd/go-again"
@@ -274,6 +274,374 @@ func TestSchedulerJobIntrospection(t *testing.T) {
 	if got := sched.JobCount(); got != 0 {
 		t.Fatalf("expected 0 registered jobs after removal, got %d", got)
 	}
+}
+
+func TestSchedulerStatusAndHistory(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	sched := scheduler.NewScheduler(
+		scheduler.WithHTTPClient(server.Client()),
+		scheduler.WithURLValidator(newTestURLValidator(t)),
+		scheduler.WithHistoryLimit(2),
+	)
+	defer sched.Stop()
+
+	jobID, err := sched.Schedule(scheduler.Job{
+		Schedule: scheduler.Schedule{
+			Every:   5 * time.Millisecond,
+			MaxRuns: 3,
+		},
+		Request: scheduler.Request{
+			Method: http.MethodGet,
+			URL:    server.URL + targetPath,
+		},
+	})
+	if err != nil {
+		t.Fatalf(scheduleJobError, err)
+	}
+
+	status := waitForJobStatus(t, sched, jobID, func(current scheduler.JobStatus) bool {
+		return current.State == scheduler.JobStateCompleted && current.Runs == retryAndCallbackAttempts
+	})
+
+	if status.ActiveRuns != 0 {
+		t.Fatalf("expected no active runs, got %d", status.ActiveRuns)
+	}
+
+	if status.LastRun == nil {
+		t.Fatal("expected last run details to be present")
+	}
+
+	history, ok := sched.JobHistory(jobID)
+	if !ok {
+		t.Fatalf("expected history for job %q", jobID)
+	}
+
+	if len(history) != 2 {
+		t.Fatalf("expected 2 retained history entries, got %d", len(history))
+	}
+
+	if history[0].Sequence != 2 || history[1].Sequence != retryAndCallbackAttempts {
+		t.Fatalf(
+			"expected retained history sequences [2 %d], got [%d %d]",
+			retryAndCallbackAttempts,
+			history[0].Sequence,
+			history[1].Sequence,
+		)
+	}
+}
+
+func TestSchedulerStatusRemoved(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	sched := newTLSTestScheduler(t, server)
+
+	jobID, err := sched.Schedule(scheduler.Job{
+		Schedule: scheduler.Schedule{
+			Every:   50 * time.Millisecond,
+			StartAt: time.Now().Add(500 * time.Millisecond),
+			MaxRuns: 1,
+		},
+		Request: scheduler.Request{
+			Method: http.MethodGet,
+			URL:    server.URL + targetPath,
+		},
+	})
+	if err != nil {
+		t.Fatalf(scheduleJobError, err)
+	}
+
+	if !sched.Remove(jobID) {
+		t.Fatalf("expected job %q to be removed", jobID)
+	}
+
+	status := waitForJobStatus(t, sched, jobID, func(current scheduler.JobStatus) bool {
+		return current.State == scheduler.JobStateRemoved
+	})
+
+	if status.Runs != 0 {
+		t.Fatalf("expected removed job to have 0 runs, got %d", status.Runs)
+	}
+
+	history, ok := sched.JobHistory(jobID)
+	if !ok {
+		t.Fatalf("expected history record for removed job %q", jobID)
+	}
+
+	if len(history) != 0 {
+		t.Fatalf("expected removed job to have empty history, got %d entries", len(history))
+	}
+}
+
+func TestSchedulerWithCustomJobsStorage(t *testing.T) {
+	t.Parallel()
+
+	store := newTrackingJobsStorage()
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	sched := scheduler.NewScheduler(
+		scheduler.WithJobsStorage(store),
+		scheduler.WithHTTPClient(server.Client()),
+		scheduler.WithURLValidator(newTestURLValidator(t)),
+	)
+	defer sched.Stop()
+
+	jobID, err := sched.Schedule(scheduler.Job{
+		Schedule: scheduler.Schedule{
+			Every:   time.Second,
+			StartAt: time.Now().Add(500 * time.Millisecond),
+			MaxRuns: 1,
+		},
+		Request: scheduler.Request{
+			Method: http.MethodGet,
+			URL:    server.URL + targetPath,
+		},
+	})
+	if err != nil {
+		t.Fatalf(scheduleJobError, err)
+	}
+
+	if got := sched.JobCount(); got != 1 {
+		t.Fatalf("expected job count 1 from custom storage, got %d", got)
+	}
+
+	if store.saveCalls() != 1 {
+		t.Fatalf("expected custom storage save calls to be 1, got %d", store.saveCalls())
+	}
+
+	if !sched.Remove(jobID) {
+		t.Fatalf("expected job %q to be removed", jobID)
+	}
+
+	if got := sched.JobCount(); got != 0 {
+		t.Fatalf("expected job count 0 after remove, got %d", got)
+	}
+
+	if store.deleteCalls() == 0 {
+		t.Fatal("expected custom storage delete to be invoked")
+	}
+}
+
+func TestSchedulerWithCustomJobsStoragePersistsStatusAndHistory(t *testing.T) {
+	t.Parallel()
+
+	store := newTrackingJobsStorage()
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	sched := scheduler.NewScheduler(
+		scheduler.WithJobsStorage(store),
+		scheduler.WithHTTPClient(server.Client()),
+		scheduler.WithURLValidator(newTestURLValidator(t)),
+		scheduler.WithHistoryLimit(1),
+	)
+	defer sched.Stop()
+
+	jobID, err := sched.Schedule(scheduler.Job{
+		Schedule: scheduler.Schedule{
+			Every:   5 * time.Millisecond,
+			MaxRuns: 1,
+		},
+		Request: scheduler.Request{
+			Method: http.MethodGet,
+			URL:    server.URL + targetPath,
+		},
+	})
+	if err != nil {
+		t.Fatalf(scheduleJobError, err)
+	}
+
+	_ = waitForJobStatus(t, sched, jobID, func(current scheduler.JobStatus) bool {
+		return current.State == scheduler.JobStateCompleted && current.Runs == 1
+	})
+
+	history, ok := sched.JobHistory(jobID)
+	if !ok || len(history) != 1 {
+		t.Fatalf("expected custom storage history for %q with 1 entry, got ok=%t len=%d", jobID, ok, len(history))
+	}
+
+	if store.statusUpsertCalls() == 0 {
+		t.Fatal("expected custom storage status upsert to be invoked")
+	}
+
+	if store.executionResultCalls() == 0 {
+		t.Fatal("expected custom storage execution result persistence to be invoked")
+	}
+}
+
+func TestSchedulerDuplicateIDUsesJobsStorage(t *testing.T) {
+	t.Parallel()
+
+	store := newTrackingJobsStorage()
+
+	const jobID = "job-custom-storage"
+
+	err := store.Save(scheduler.Job{
+		ID: jobID,
+	})
+	if err != nil {
+		t.Fatalf("failed to seed custom storage: %v", err)
+	}
+
+	sched := scheduler.NewScheduler(
+		scheduler.WithJobsStorage(store),
+		scheduler.WithURLValidator(nil),
+	)
+	defer sched.Stop()
+
+	_, err = sched.Schedule(scheduler.Job{
+		ID: jobID,
+		Schedule: scheduler.Schedule{
+			Every: time.Second,
+		},
+		Request: scheduler.Request{
+			Method: http.MethodGet,
+			URL:    "https://example.com",
+		},
+	})
+	if err == nil || !errors.Is(err, scheduler.ErrInvalidJob) {
+		t.Fatalf("expected invalid job error for duplicate ID in storage, got %v", err)
+	}
+}
+
+func TestSchedulerScheduleFailsWhenStatusPersistenceFails(t *testing.T) {
+	t.Parallel()
+
+	store := newFailingJobsStorage()
+	store.failUpsertStatus = scheduler.ErrInvalidJob
+
+	sched := scheduler.NewScheduler(
+		scheduler.WithJobsStorage(store),
+		scheduler.WithURLValidator(nil),
+	)
+	defer sched.Stop()
+
+	_, err := sched.Schedule(scheduler.Job{
+		Schedule: scheduler.Schedule{
+			Every: time.Second,
+		},
+		Request: scheduler.Request{
+			Method: http.MethodGet,
+			URL:    "https://example.com",
+		},
+	})
+	if err == nil || !errors.Is(err, scheduler.ErrStorageOperation) {
+		t.Fatalf("expected storage operation error for status persistence failure, got %v", err)
+	}
+
+	if got := sched.JobCount(); got != 0 {
+		t.Fatalf("expected scheduled job rollback after persistence failure, got count %d", got)
+	}
+}
+
+func TestSchedulerLogsStorageWriteFailureOnRemove(t *testing.T) {
+	t.Parallel()
+
+	store := newFailingJobsStorage()
+	store.failMarkRemoved = scheduler.ErrInvalidJob
+
+	logBuffer := &lockedBuffer{}
+	logger := slog.New(slog.NewTextHandler(logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	sched := scheduler.NewScheduler(
+		scheduler.WithLogger(logger),
+		scheduler.WithJobsStorage(store),
+		scheduler.WithURLValidator(nil),
+	)
+	defer sched.Stop()
+
+	jobID, err := sched.Schedule(scheduler.Job{
+		Schedule: scheduler.Schedule{
+			Every:   time.Second,
+			StartAt: time.Now().Add(500 * time.Millisecond),
+			MaxRuns: 1,
+		},
+		Request: scheduler.Request{
+			Method: http.MethodGet,
+			URL:    "https://example.com",
+		},
+	})
+	if err != nil {
+		t.Fatalf(scheduleJobError, err)
+	}
+
+	if !sched.Remove(jobID) {
+		t.Fatalf("expected remove to succeed for %q", jobID)
+	}
+
+	waitForLogSubstring(t, logBuffer, "scheduler storage write failed")
+	waitForLogSubstring(t, logBuffer, "operation=mark removed job_id="+jobID)
+}
+
+func TestSchedulerStorageExecutionWriteFailureLogsAndContinues(t *testing.T) {
+	t.Parallel()
+
+	hitCh := make(chan struct{}, 1)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		select {
+		case hitCh <- struct{}{}:
+		default:
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	store := newFailingJobsStorage()
+	store.failMarkExecutionStart = scheduler.ErrInvalidJob
+	store.failRecordExecutionResult = scheduler.ErrInvalidJob
+
+	logBuffer := &lockedBuffer{}
+	logger := slog.New(slog.NewTextHandler(logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	sched := scheduler.NewScheduler(
+		scheduler.WithLogger(logger),
+		scheduler.WithJobsStorage(store),
+		scheduler.WithURLValidator(nil),
+	)
+	defer sched.Stop()
+
+	_, err := sched.Schedule(scheduler.Job{
+		Schedule: scheduler.Schedule{
+			Every:   5 * time.Millisecond,
+			MaxRuns: 1,
+		},
+		Request: scheduler.Request{
+			Method: http.MethodGet,
+			URL:    server.URL,
+		},
+	})
+	if err != nil {
+		t.Fatalf(scheduleJobError, err)
+	}
+
+	select {
+	case <-hitCh:
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out waiting for request execution")
+	}
+
+	waitForLogSubstring(t, logBuffer, "scheduler storage write failed")
+	waitForLogSubstring(t, logBuffer, "operation=mark execution start")
+	waitForLogSubstring(t, logBuffer, "operation=record execution result")
 }
 
 func TestSchedulerEndAtInPastStopsImmediately(t *testing.T) {
@@ -629,6 +997,22 @@ func TestSchedulerCallbackBodyLimit(t *testing.T) {
 func TestSchedulerLoggerWarnsOnCallbackSendFailure(t *testing.T) {
 	t.Parallel()
 
+	assertSchedulerLogsCallbackFailure(t, "http://127.0.0.1:1/callback", "callback send failed")
+}
+
+func TestSchedulerLoggerWarnsOnCallbackRequestFailure(t *testing.T) {
+	t.Parallel()
+
+	assertSchedulerLogsCallbackFailure(t, "://invalid-callback-url", "callback request failed")
+}
+
+func assertSchedulerLogsCallbackFailure(
+	t *testing.T,
+	callbackURL string,
+	wantLog string,
+) {
+	t.Helper()
+
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -653,14 +1037,14 @@ func TestSchedulerLoggerWarnsOnCallbackSendFailure(t *testing.T) {
 			URL:    target.URL,
 		},
 		Callback: scheduler.Callback{
-			URL: "http://127.0.0.1:1/callback",
+			URL: callbackURL,
 		},
 	})
 	if err != nil {
 		t.Fatalf(scheduleJobError, err)
 	}
 
-	waitForLogSubstring(t, logBuffer, "callback send failed")
+	waitForLogSubstring(t, logBuffer, wantLog)
 }
 
 func newSchedulerTestRetrier(t *testing.T, maxRetries int) *again.Retrier {
@@ -857,7 +1241,7 @@ func (b *lockedBuffer) Write(p []byte) (int, error) {
 
 	n, err := b.buf.Write(p)
 	if err != nil {
-		return 0, fmt.Errorf("locked buffer write failed: %w", err)
+		return 0, ewrap.Wrapf(err, "locked buffer write failed")
 	}
 
 	return n, nil
@@ -883,4 +1267,252 @@ func waitForLogSubstring(t *testing.T, buf *lockedBuffer, want string) {
 	}
 
 	t.Fatalf("timed out waiting for log containing %q; logs=%q", want, buf.String())
+}
+
+type trackingJobsStorage struct {
+	base             *scheduler.InMemoryJobsStorage
+	mu               sync.Mutex
+	saves            int
+	deletes          int
+	statusUpserts    int
+	executionResults int
+}
+
+func newTrackingJobsStorage() *trackingJobsStorage {
+	return &trackingJobsStorage{
+		base: scheduler.NewInMemoryJobsStorage(),
+	}
+}
+
+func (s *trackingJobsStorage) Save(job scheduler.Job) error {
+	s.mu.Lock()
+	s.saves++
+	s.mu.Unlock()
+
+	return s.base.Save(job)
+}
+
+func (s *trackingJobsStorage) Delete(id string) bool {
+	s.mu.Lock()
+	s.deletes++
+	s.mu.Unlock()
+
+	return s.base.Delete(id)
+}
+
+func (s *trackingJobsStorage) Exists(id string) bool {
+	return s.base.Exists(id)
+}
+
+func (s *trackingJobsStorage) Count() int {
+	return s.base.Count()
+}
+
+func (s *trackingJobsStorage) IDs() []string {
+	return s.base.IDs()
+}
+
+func (s *trackingJobsStorage) UpsertStatus(id string, state scheduler.JobState) error {
+	s.mu.Lock()
+	s.statusUpserts++
+	s.mu.Unlock()
+
+	return s.base.UpsertStatus(id, state)
+}
+
+func (s *trackingJobsStorage) MarkRemoved(id string) error {
+	return s.base.MarkRemoved(id)
+}
+
+func (s *trackingJobsStorage) MarkTerminal(id string, state scheduler.JobState) error {
+	return s.base.MarkTerminal(id, state)
+}
+
+func (s *trackingJobsStorage) MarkExecutionStart(id string) error {
+	return s.base.MarkExecutionStart(id)
+}
+
+func (s *trackingJobsStorage) RecordExecutionResult(
+	id string,
+	payload scheduler.CallbackPayload,
+	historyLimit int,
+) error {
+	s.mu.Lock()
+	s.executionResults++
+	s.mu.Unlock()
+
+	return s.base.RecordExecutionResult(id, payload, historyLimit)
+}
+
+func (s *trackingJobsStorage) State(id string) (scheduler.JobState, bool) {
+	return s.base.State(id)
+}
+
+func (s *trackingJobsStorage) Status(id string) (scheduler.JobStatus, bool) {
+	return s.base.Status(id)
+}
+
+func (s *trackingJobsStorage) Statuses() []scheduler.JobStatus {
+	return s.base.Statuses()
+}
+
+func (s *trackingJobsStorage) History(id string) ([]scheduler.JobRun, bool) {
+	return s.base.History(id)
+}
+
+func (s *trackingJobsStorage) saveCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.saves
+}
+
+func (s *trackingJobsStorage) deleteCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.deletes
+}
+
+func (s *trackingJobsStorage) statusUpsertCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.statusUpserts
+}
+
+func (s *trackingJobsStorage) executionResultCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.executionResults
+}
+
+type failingJobsStorage struct {
+	base *scheduler.InMemoryJobsStorage
+
+	failSave                  error
+	failUpsertStatus          error
+	failMarkRemoved           error
+	failMarkTerminal          error
+	failMarkExecutionStart    error
+	failRecordExecutionResult error
+}
+
+func newFailingJobsStorage() *failingJobsStorage {
+	return &failingJobsStorage{
+		base: scheduler.NewInMemoryJobsStorage(),
+	}
+}
+
+func (s *failingJobsStorage) Save(job scheduler.Job) error {
+	if s.failSave != nil {
+		return s.failSave
+	}
+
+	return s.base.Save(job)
+}
+
+func (s *failingJobsStorage) Delete(id string) bool {
+	return s.base.Delete(id)
+}
+
+func (s *failingJobsStorage) Exists(id string) bool {
+	return s.base.Exists(id)
+}
+
+func (s *failingJobsStorage) Count() int {
+	return s.base.Count()
+}
+
+func (s *failingJobsStorage) IDs() []string {
+	return s.base.IDs()
+}
+
+func (s *failingJobsStorage) UpsertStatus(id string, state scheduler.JobState) error {
+	if s.failUpsertStatus != nil {
+		return s.failUpsertStatus
+	}
+
+	return s.base.UpsertStatus(id, state)
+}
+
+func (s *failingJobsStorage) MarkRemoved(id string) error {
+	if s.failMarkRemoved != nil {
+		return s.failMarkRemoved
+	}
+
+	return s.base.MarkRemoved(id)
+}
+
+func (s *failingJobsStorage) MarkTerminal(id string, state scheduler.JobState) error {
+	if s.failMarkTerminal != nil {
+		return s.failMarkTerminal
+	}
+
+	return s.base.MarkTerminal(id, state)
+}
+
+func (s *failingJobsStorage) MarkExecutionStart(id string) error {
+	if s.failMarkExecutionStart != nil {
+		return s.failMarkExecutionStart
+	}
+
+	return s.base.MarkExecutionStart(id)
+}
+
+func (s *failingJobsStorage) RecordExecutionResult(
+	id string,
+	payload scheduler.CallbackPayload,
+	historyLimit int,
+) error {
+	if s.failRecordExecutionResult != nil {
+		return s.failRecordExecutionResult
+	}
+
+	return s.base.RecordExecutionResult(id, payload, historyLimit)
+}
+
+func (s *failingJobsStorage) State(id string) (scheduler.JobState, bool) {
+	return s.base.State(id)
+}
+
+func (s *failingJobsStorage) Status(id string) (scheduler.JobStatus, bool) {
+	return s.base.Status(id)
+}
+
+func (s *failingJobsStorage) Statuses() []scheduler.JobStatus {
+	return s.base.Statuses()
+}
+
+func (s *failingJobsStorage) History(id string) ([]scheduler.JobRun, bool) {
+	return s.base.History(id)
+}
+
+func waitForJobStatus(
+	t *testing.T,
+	sched *scheduler.Scheduler,
+	jobID string,
+	match func(scheduler.JobStatus) bool,
+) scheduler.JobStatus {
+	t.Helper()
+
+	deadline := time.Now().Add(schedulerCallbackWaitTimeout)
+	for time.Now().Before(deadline) {
+		status, ok := sched.JobStatus(jobID)
+		if ok && match(status) {
+			return status
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	status, ok := sched.JobStatus(jobID)
+	if !ok {
+		t.Fatalf("timed out waiting for job status %q", jobID)
+	}
+
+	t.Fatalf("timed out waiting for expected job status condition for %q, last status: %+v", jobID, status)
+
+	return scheduler.JobStatus{}
 }

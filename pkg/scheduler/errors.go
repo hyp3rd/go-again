@@ -1,21 +1,24 @@
 package scheduler
 
 import (
-	"errors"
 	"fmt"
+
+	"github.com/hyp3rd/ewrap"
 )
 
 var (
 	// ErrInvalidJob is returned when a job fails validation.
-	ErrInvalidJob = errors.New("invalid job")
+	ErrInvalidJob = ewrap.New("invalid job")
+	// ErrStorageOperation is returned when scheduler state persistence fails.
+	ErrStorageOperation = ewrap.New("storage operation failed")
 	// ErrSchedulerStopped is returned when scheduling is attempted after Stop.
-	ErrSchedulerStopped = errors.New("scheduler stopped")
+	ErrSchedulerStopped = ewrap.New("scheduler stopped")
 	// ErrURLValidatorInitialization is returned when the default URL validator cannot be created.
-	ErrURLValidatorInitialization = errors.New("url validator initialization failed")
+	ErrURLValidatorInitialization = ewrap.New("url validator initialization failed")
 	// ErrUnsupportedMethod is returned for unsupported HTTP methods.
-	ErrUnsupportedMethod = errors.New("unsupported method")
+	ErrUnsupportedMethod = ewrap.New("unsupported method")
 	// ErrRetryableStatus marks responses that should be retried.
-	ErrRetryableStatus = errors.New("retryable status")
+	ErrRetryableStatus = ewrap.New("retryable status")
 )
 
 // StatusError reports a non-successful response status.

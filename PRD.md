@@ -65,10 +65,11 @@ After this audit, a follow-up implementation pass completed the highest-priority
 - `Makefile` `run` now executes `__examples/*` (`make run example=...`) and `bench` now uses a valid `go test` benchmark command.
 - Added tests for retrier hooks, scheduler concurrency limiting, scheduler post-stop scheduling guard, and completed-job cleanup behavior.
 - Added `NewSchedulerWithError(...)` to surface default URL validator initialization failures while keeping `NewScheduler(...)` backward-compatible (warning + continue).
-- Added lightweight scheduler introspection methods: `JobCount()` and `JobIDs()`.
-- Added scheduler logger coverage for callback send failures.
+- Added scheduler status/history APIs: `JobStatus(id)`, `JobStatuses()`, and `JobHistory(id)` plus `WithHistoryLimit(...)`.
+- Added pluggable scheduler state storage via `WithJobsStorage(...)` and default `InMemoryJobsStorage` (active jobs + status/history).
+- Expanded logger coverage: callback send failure, callback request creation failure, warn/debug `logError` behavior, and `NewScheduler()` warning-path logging for validator init failures.
 
-This closes gap `#1`, closes gap `#5`, and partially addresses gaps `#2`, `#4`, `#6`, and `#7` below.
+This closes gap `#1`, closes gap `#5`, and partially addresses gaps `#2`, `#4`, `#6`, and `#7`.
 
 ## Status vs Original PRD
 
@@ -120,7 +121,7 @@ This closes gap `#1`, closes gap `#5`, and partially addresses gaps `#2`, `#4`, 
 
 ### Scheduler
 
-- In-memory scheduler with per-job goroutine lifecycle
+- Scheduler with per-job goroutine lifecycle and pluggable state storage (`WithJobsStorage`)
 - Request execution with supported methods: `GET`, `POST`, `PUT`
 - Request retrying through `again.Retrier`
 - Retry-by-status (`RetryStatusCodes`) and retry-by-error (`TemporaryErrors`)
@@ -138,7 +139,7 @@ This closes gap `#1`, closes gap `#5`, and partially addresses gaps `#2`, `#4`, 
 - Status:
       - Fixed by `runJob()` cleanup (`defer s.cleanupJob(entry)`), with pointer matching to avoid deleting a replacement job entry.
 - Remaining consideration:
-      - Richer job status retention/history is still not implemented (see gap `#6`).
+      - Default storage remains in-memory; use custom storage for durability across process restarts.
 
 ### 2. Lifecycle terminal semantics are easy to misuse and were undocumented
 
@@ -179,13 +180,16 @@ This closes gap `#1`, closes gap `#5`, and partially addresses gaps `#2`, `#4`, 
 - Remaining consideration:
       - The Makefile still contains some scaffold-oriented targets that may not be relevant to this repo's current scope.
 
-### 6. Missing scheduler introspection/status APIs
+### 6. Scheduler observability/read APIs are still intentionally basic
 
-- Current API now supports lightweight introspection (`JobCount`, `JobIDs`) in addition to `Schedule`, `Remove`, and `Stop`, but not:
-      - list jobs,
-      - query job state,
-      - inspect last run result,
-      - metrics hooks.
+- Current API now supports:
+      - lightweight introspection (`JobCount`, `JobIDs`)
+      - per-job status (`JobStatus`, `JobStatuses`)
+      - per-job run history (`JobHistory`) with retention control (`WithHistoryLimit`)
+- Remaining gaps:
+      - richer query/filter semantics for large job sets
+      - long-term history retention strategy (for example pruning/archival policy) even when using persistent storage backends
+      - metrics hooks
 - Impact:
       - Usable for embedded/simple scheduling, but limited for production observability.
 - Recommendation:
@@ -194,9 +198,8 @@ This closes gap `#1`, closes gap `#5`, and partially addresses gaps `#2`, `#4`, 
 ### 7. Test coverage gaps (non-blocking, but worth addressing)
 
 - No explicit tests for:
-      - full scheduler logger behavior coverage (`WithLogger`) beyond the callback-send-failure path
-      - additional introspection/status behavior once richer status APIs are added
-      - `NewScheduler()` warning-path logging when default URL validator initialization fails
+      - additional introspection/status behavior once richer status APIs (querying/filtering/pagination) are added
+      - edge-case coverage for status/history retention under very high churn
 - Recommendation:
       - Add focused tests before changing scheduler lifecycle semantics.
 

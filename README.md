@@ -5,11 +5,11 @@
 `go-again` provides:
 
 - `again`: a thread-safe retry helper with exponential backoff, jitter, timeout, cancellation, hooks, and a temporary-error registry.
-- `pkg/scheduler`: a lightweight in-memory HTTP scheduler that reuses the retrier for retryable requests and optional callbacks.
+- `pkg/scheduler`: a lightweight HTTP scheduler with pluggable state storage (in-memory by default, SQLite built-in) that reuses the retrier for retryable requests and optional callbacks.
 
 ## Status
 
-As of February 26, 2026, the core retrier hardening work and the scheduler extension described in `PRD.md` are implemented and covered by tests, including race checks.
+As of February 27, 2026, the core retrier hardening work and the scheduler extension described in `PRD.md` are implemented and covered by tests, including race checks.
 
 ## Features
 
@@ -31,7 +31,7 @@ As of February 26, 2026, the core retrier hardening work and the scheduler exten
 - Retry integration via `RetryPolicy`
 - Optional callback with bounded response-body capture
 - URL validation by default (via `sectools`) with override/disable support
-- Custom HTTP client, logger, and concurrency limit
+- Custom HTTP client, logger, concurrency limit, and scheduler-state storage backend
 
 ## Installation
 
@@ -154,7 +154,7 @@ func main() {
  )
  defer s.Stop()
 
- _, _ = s.Schedule(scheduler.Job{
+_, _ = s.Schedule(scheduler.Job{
   Schedule: scheduler.Schedule{
    Every:   1 * time.Minute,
    MaxRuns: 1,
@@ -170,9 +170,162 @@ func main() {
   RetryPolicy: scheduler.RetryPolicy{
    Retrier:          retrier,
    RetryStatusCodes: []int{http.StatusTooManyRequests, http.StatusInternalServerError},
+ },
+})
+}
+```
+
+## Scheduler Examples
+
+### Example: Schedule Once + Callback
+
+Runnable version:
+
+```bash
+go run ./__examples/scheduler
+```
+
+```go
+package main
+
+import (
+ "encoding/json"
+ "fmt"
+ "net/http"
+ "net/http/httptest"
+ "time"
+
+ "github.com/hyp3rd/go-again/pkg/scheduler"
+)
+
+func main() {
+ callbackCh := make(chan scheduler.CallbackPayload, 1)
+
+ mux := http.NewServeMux()
+ mux.HandleFunc("/target", func(w http.ResponseWriter, _ *http.Request) {
+  w.WriteHeader(http.StatusOK)
+ })
+ mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
+  defer r.Body.Close()
+
+  var payload scheduler.CallbackPayload
+  _ = json.NewDecoder(r.Body).Decode(&payload)
+  callbackCh <- payload
+  w.WriteHeader(http.StatusOK)
+ })
+
+ server := httptest.NewTLSServer(mux)
+ defer server.Close()
+
+ s := scheduler.NewScheduler(
+  scheduler.WithHTTPClient(server.Client()),
+  scheduler.WithURLValidator(nil), // allow local http(s) in this example
+ )
+ defer s.Stop()
+
+ jobID, err := s.Schedule(scheduler.Job{
+  Schedule: scheduler.Schedule{Every: 10 * time.Millisecond, MaxRuns: 1},
+  Request: scheduler.Request{
+   Method: http.MethodGet,
+   URL:    server.URL + "/target",
+  },
+  Callback: scheduler.Callback{
+   URL: server.URL + "/callback",
   },
  })
+ if err != nil {
+  panic(err)
+ }
+
+ select {
+ case payload := <-callbackCh:
+  fmt.Println("job:", jobID, "success:", payload.Success, "status:", payload.StatusCode)
+ case <-time.After(2 * time.Second):
+  panic("timed out waiting for callback")
+ }
 }
+```
+
+### Example: Query Status and History
+
+```go
+// after Schedule(...)
+status, ok := s.JobStatus(jobID)
+if ok {
+ fmt.Println("state:", status.State, "runs:", status.Runs, "active:", status.ActiveRuns)
+}
+
+history, ok := s.JobHistory(jobID)
+if ok {
+ for _, run := range history {
+  fmt.Println("run#", run.Sequence, "status:", run.Payload.StatusCode, "success:", run.Payload.Success)
+ }
+}
+```
+
+### Example: Durable Scheduler State with SQLite
+
+Runnable version:
+
+```bash
+go run ./__examples/scheduler_sqlite
+```
+
+```go
+package main
+
+import (
+ "fmt"
+ "net/http"
+ "path/filepath"
+ "time"
+
+ "github.com/hyp3rd/go-again/pkg/scheduler"
+)
+
+func main() {
+ dbPath := filepath.Join(".", "scheduler-state.db")
+
+ storage, err := scheduler.NewSQLiteJobsStorage(dbPath)
+ if err != nil {
+  panic(err)
+ }
+ defer storage.Close()
+
+ s := scheduler.NewScheduler(
+  scheduler.WithJobsStorage(storage),
+  scheduler.WithURLValidator(nil),
+ )
+ defer s.Stop()
+
+ jobID, err := s.Schedule(scheduler.Job{
+  Schedule: scheduler.Schedule{Every: time.Minute, MaxRuns: 1},
+  Request: scheduler.Request{
+   Method: http.MethodGet,
+   URL:    "https://example.com/health",
+  },
+ })
+ if err != nil {
+  panic(err)
+ }
+
+ fmt.Println("scheduled job:", jobID)
+}
+```
+
+### Example: Fail-Closed Scheduler Construction
+
+Use `NewSchedulerWithError(...)` when constructor-time URL validator initialization errors must fail startup.
+
+```go
+s, err := scheduler.NewSchedulerWithError(
+ scheduler.WithConcurrency(8),
+)
+if err != nil {
+ // fail startup instead of warning + degraded mode
+ return err
+}
+defer s.Stop()
 ```
 
 ### Scheduler Options
@@ -180,6 +333,8 @@ func main() {
 - `WithHTTPClient(client)` sets the HTTP client used for requests and callbacks.
 - `WithLogger(logger)` sets the scheduler logger.
 - `WithConcurrency(n)` limits concurrent executions when `n > 0`.
+- `WithJobsStorage(storage)` sets pluggable scheduler state storage (active jobs plus status/history; default: in-memory).
+- `WithHistoryLimit(limit)` sets retained per-job history length (default `20`).
 - `WithURLValidator(validator)` overrides URL validation. Pass `nil` to disable validation.
 - `NewSchedulerWithError(...)` returns constructor errors (including default URL validator initialization failure).
 
@@ -192,7 +347,13 @@ func main() {
 - `Request.Timeout` and `Callback.Timeout` apply per HTTP request/callback (not the schedule lifetime).
 - If `RetryPolicy.Retrier` is nil, the scheduler creates a default retrier and loads registry defaults.
 - Calling `Schedule` after `Stop()` returns `scheduler.ErrSchedulerStopped`.
+- `Schedule` returns `scheduler.ErrStorageOperation` when required scheduler-state persistence fails.
+- `NewSchedulerWithError(...)` should be preferred for fail-closed startup behavior in security-sensitive paths.
 - `JobCount()` and `JobIDs()` provide lightweight read-only scheduler introspection.
+- `JobStatus(id)`, `JobStatuses()`, and `JobHistory(id)` provide status and retained run history snapshots.
+- Default `InMemoryJobsStorage` is process-local; use `WithJobsStorage(...)` for custom durable/backed storage.
+- `NewSQLiteJobsStorage(path)` provides a built-in durable storage implementation for `WithJobsStorage(...)`; call `Close()` when finished.
+- Non-fatal storage write failures during runtime transitions are logged (warn) and execution continues.
 - `NewScheduler()` logs a warning and continues if default URL validator initialization fails; use `NewSchedulerWithError()` to fail closed.
 
 ### Custom URL Validation (Allow Local HTTPS)
@@ -224,6 +385,8 @@ Run the example programs directly:
 ```bash
 go run ./__examples/chan
 go run ./__examples/context
+go run ./__examples/scheduler
+go run ./__examples/scheduler_sqlite
 go run ./__examples/timeout
 go run ./__examples/validate
 ```
