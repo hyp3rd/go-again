@@ -37,6 +37,7 @@ var newDefaultURLValidator = func() (*validate.URLValidator, error) {
 type jobEntry struct {
 	job    Job
 	cancel context.CancelFunc
+	runsWg sync.WaitGroup
 }
 
 // Scheduler coordinates scheduled jobs.
@@ -159,6 +160,14 @@ func (s *Scheduler) Schedule(job Job) (string, error) {
 	}
 
 	ctx, cancel := context.WithCancel(s.ctx)
+	keepCancel := false
+
+	defer func() {
+		if !keepCancel {
+			cancel()
+		}
+	}()
+
 	entry := &jobEntry{
 		job:    normalized,
 		cancel: cancel,
@@ -168,6 +177,8 @@ func (s *Scheduler) Schedule(job Job) (string, error) {
 	s.wg.Add(1)
 
 	go s.runJob(ctx, entry)
+
+	keepCancel = true
 
 	return normalized.ID, nil
 }
@@ -486,6 +497,7 @@ func ensureRetrier(job *Job) error {
 func (s *Scheduler) runJob(ctx context.Context, entry *jobEntry) {
 	defer s.wg.Done()
 	defer s.cleanupJob(entry)
+	defer entry.cancel()
 
 	job := entry.job
 
@@ -494,6 +506,7 @@ func (s *Scheduler) runJob(ctx context.Context, entry *jobEntry) {
 	defer func() {
 		s.finalizeJobState(job.ID, terminalState)
 	}()
+	defer entry.runsWg.Wait()
 
 	if !job.Schedule.StartAt.IsZero() {
 		if !s.waitUntil(ctx, job.Schedule.StartAt) {
@@ -525,7 +538,7 @@ func (s *Scheduler) runJob(ctx context.Context, entry *jobEntry) {
 
 		runs++
 		scheduledAt := time.Now()
-		s.enqueue(ctx, job, scheduledAt)
+		s.enqueue(ctx, entry, scheduledAt)
 
 		select {
 		case <-ctx.Done():
@@ -565,17 +578,21 @@ func (*Scheduler) waitUntil(ctx context.Context, when time.Time) bool {
 	}
 }
 
-func (s *Scheduler) enqueue(ctx context.Context, job Job, scheduledAt time.Time) {
+func (s *Scheduler) enqueue(ctx context.Context, entry *jobEntry, scheduledAt time.Time) {
 	if s.sem != nil {
 		s.sem <- struct{}{}
 	}
 
+	entry.runsWg.Add(1)
+
 	s.wg.Go(func() {
+		defer entry.runsWg.Done()
+
 		if s.sem != nil {
 			defer func() { <-s.sem }()
 		}
 
-		s.execute(ctx, job, scheduledAt)
+		s.execute(ctx, entry.job, scheduledAt)
 	})
 }
 
@@ -583,15 +600,19 @@ func (s *Scheduler) execute(ctx context.Context, job Job, scheduledAt time.Time)
 	s.markExecutionStart(job.ID)
 
 	startedAt := time.Now()
-	retrier := job.RetryPolicy.Retrier
-	temporaryErrors := s.buildTemporaryErrors(retrier, job.RetryPolicy)
+	retrier, temporaryErrors := job.RetryPolicy.Retrier,
+		s.buildTemporaryErrors(job.RetryPolicy.Retrier, job.RetryPolicy)
 	state := &executionState{}
 
 	errs := retrier.DoWithContext(ctx, func(attemptCtx context.Context) error {
 		state.incrementAttempts()
 
-		reqCtx, cancel := s.requestContext(attemptCtx, job.Request.Timeout)
-		if cancel != nil {
+		reqCtx := attemptCtx
+
+		if job.Request.Timeout > 0 {
+			var cancel context.CancelFunc
+
+			reqCtx, cancel = context.WithTimeout(attemptCtx, job.Request.Timeout)
 			defer cancel()
 		}
 
@@ -636,7 +657,6 @@ func (s *Scheduler) execute(ctx context.Context, job Job, scheduledAt time.Time)
 	}, temporaryErrors...)
 
 	snapshot := state.snapshot()
-
 	finishedAt := time.Now()
 	payload := CallbackPayload{
 		JobID:        job.ID,
@@ -693,14 +713,6 @@ func (s *executionState) snapshot() executionSnapshot {
 	}
 }
 
-func (*Scheduler) requestContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
-	if timeout <= 0 {
-		return ctx, nil
-	}
-
-	return context.WithTimeout(ctx, timeout)
-}
-
 func (s *Scheduler) sendCallback(ctx context.Context, job Job, payload CallbackPayload) {
 	if job.Callback.URL == "" {
 		return
@@ -713,8 +725,12 @@ func (s *Scheduler) sendCallback(ctx context.Context, job Job, payload CallbackP
 		return
 	}
 
-	cbCtx, cancel := s.requestContext(ctx, job.Callback.Timeout)
-	if cancel != nil {
+	cbCtx := ctx
+
+	if job.Callback.Timeout > 0 {
+		var cancel context.CancelFunc
+
+		cbCtx, cancel = context.WithTimeout(ctx, job.Callback.Timeout)
 		defer cancel()
 	}
 
