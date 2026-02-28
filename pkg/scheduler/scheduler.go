@@ -159,14 +159,10 @@ func (s *Scheduler) Schedule(job Job) (string, error) {
 		return "", ewrap.Wrapf(ErrStorageOperation, "job status upsert failed: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(s.ctx)
-	keepCancel := false
-
-	defer func() {
-		if !keepCancel {
-			cancel()
-		}
-	}()
+	ctx, cancelCause := context.WithCancelCause(s.ctx)
+	cancel := func() {
+		cancelCause(nil)
+	}
 
 	entry := &jobEntry{
 		job:    normalized,
@@ -176,9 +172,11 @@ func (s *Scheduler) Schedule(job Job) (string, error) {
 
 	s.wg.Add(1)
 
-	go s.runJob(ctx, entry)
+	go func() {
+		defer cancel()
 
-	keepCancel = true
+		s.runJob(ctx, entry)
+	}()
 
 	return normalized.ID, nil
 }
@@ -497,7 +495,6 @@ func ensureRetrier(job *Job) error {
 func (s *Scheduler) runJob(ctx context.Context, entry *jobEntry) {
 	defer s.wg.Done()
 	defer s.cleanupJob(entry)
-	defer entry.cancel()
 
 	job := entry.job
 
