@@ -66,8 +66,10 @@ After this audit, a follow-up implementation pass completed the highest-priority
 - Added tests for retrier hooks, scheduler concurrency limiting, scheduler post-stop scheduling guard, and completed-job cleanup behavior.
 - Added `NewSchedulerWithError(...)` to surface default URL validator initialization failures while keeping `NewScheduler(...)` backward-compatible (warning + continue).
 - Added scheduler status/history APIs: `JobStatus(id)`, `JobStatuses()`, and `JobHistory(id)` plus `WithHistoryLimit(...)`.
+- Added richer scheduler read queries: `QueryJobStatuses(JobStatusQuery)` (ID/state filters + pagination) and `QueryJobHistory(id, JobHistoryQuery)` (sequence filter + tail limit).
 - Added pluggable scheduler state storage via `WithJobsStorage(...)` and default `InMemoryJobsStorage` (active jobs + status/history).
-- Expanded logger coverage: callback send failure, callback request creation failure, warn/debug `logError` behavior, and `NewScheduler()` warning-path logging for validator init failures.
+- Added constructor-time recovered-state reconciliation: persisted `scheduled`/`running` statuses are marked `canceled` and recovered active-job registrations are cleared (no auto-resume).
+- Expanded logger coverage: callback request/send/response-read-close failure paths, request response-read-close failure paths, storage write failure paths (`mark removed`, `mark execution start`, `record execution result`, `mark terminal`, `mark stopped`), warn/debug `logError` behavior, and `NewScheduler()` warning-path logging for validator init/state-reconciliation failures.
 
 This closes gap `#1`, closes gap `#5`, and partially addresses gaps `#2`, `#4`, `#6`, and `#7`.
 
@@ -131,6 +133,7 @@ This closes gap `#1`, closes gap `#5`, and partially addresses gaps `#2`, `#4`, 
 - Optional concurrency limit (`WithConcurrency`)
 - Logging (`WithLogger`)
 - Job removal (`Remove`) and scheduler shutdown (`Stop`)
+- Startup recovered-state reconciliation for storage-backed schedulers (no automatic restart/resume of recovered active jobs)
 
 ## Gaps, Missing Features, and Flaws (Prioritized)
 
@@ -186,6 +189,7 @@ This closes gap `#1`, closes gap `#5`, and partially addresses gaps `#2`, `#4`, 
       - lightweight introspection (`JobCount`, `JobIDs`)
       - per-job status (`JobStatus`, `JobStatuses`)
       - per-job run history (`JobHistory`) with retention control (`WithHistoryLimit`)
+      - filtered status and bounded history queries (`QueryJobStatuses`, `QueryJobHistory`)
 - Remaining gaps:
       - richer query/filter semantics for large job sets
       - long-term history retention strategy (for example pruning/archival policy) even when using persistent storage backends
@@ -207,7 +211,7 @@ This closes gap `#1`, closes gap `#5`, and partially addresses gaps `#2`, `#4`, 
 
 These remain non-goals unless product scope changes:
 
-- Persistent schedules / durable storage
+- Automatic schedule execution resumption across process restarts
 - Distributed scheduler coordination
 - Cron expressions
 - Non-HTTP protocols (including gRPC scheduling targets)

@@ -3,8 +3,8 @@ package tests
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/goccy/go-json"
 	"github.com/hyp3rd/ewrap"
 	"github.com/hyp3rd/sectools/pkg/validate"
 
@@ -32,8 +33,12 @@ const (
 	callbackBodyLimitMaxBytes    = 4
 	targetPath                   = "/target"
 	callbackPath                 = "/callback"
+	schedulerLogTestBaseURL      = "https://scheduler.test"
+	schedulerStorageWriteLog     = "scheduler storage write failed"
 	scheduleJobError             = "failed to schedule job: %v"
 )
+
+var errUnexpectedRequestPath = errors.New("unexpected request path")
 
 func TestSchedulerRetryAndCallback(t *testing.T) {
 	t.Parallel()
@@ -336,6 +341,141 @@ func TestSchedulerStatusAndHistory(t *testing.T) {
 	}
 }
 
+func TestSchedulerQueryJobStatusesFiltersAndPagination(t *testing.T) {
+	t.Parallel()
+
+	store := scheduler.NewInMemoryJobsStorage()
+
+	sched := scheduler.NewScheduler(
+		scheduler.WithJobsStorage(store),
+		scheduler.WithURLValidator(nil),
+	)
+	defer sched.Stop()
+
+	statusesToSeed := []struct {
+		id    string
+		state scheduler.JobState
+	}{
+		{id: "job-1", state: scheduler.JobStateScheduled},
+		{id: "job-2", state: scheduler.JobStateRunning},
+		{id: "job-3", state: scheduler.JobStateCompleted},
+		{id: "job-4", state: scheduler.JobStateCanceled},
+	}
+
+	for _, status := range statusesToSeed {
+		err := store.UpsertStatus(status.id, status.state)
+		if err != nil {
+			t.Fatalf("failed to seed status %q: %v", status.id, err)
+		}
+	}
+
+	filteredByState := sched.QueryJobStatuses(scheduler.JobStatusQuery{
+		States: []scheduler.JobState{
+			scheduler.JobStateScheduled,
+			scheduler.JobStateRunning,
+		},
+	})
+
+	if gotIDs := collectStatusIDs(filteredByState); !slices.Equal(gotIDs, []string{"job-1", "job-2"}) {
+		t.Fatalf("expected state-filtered IDs [job-1 job-2], got %v", gotIDs)
+	}
+
+	filteredByID := sched.QueryJobStatuses(scheduler.JobStatusQuery{
+		IDs: []string{
+			"job-4",
+			"missing",
+			"job-2",
+		},
+	})
+
+	if gotIDs := collectStatusIDs(filteredByID); !slices.Equal(gotIDs, []string{"job-2", "job-4"}) {
+		t.Fatalf("expected id-filtered IDs [job-2 job-4], got %v", gotIDs)
+	}
+
+	paged := sched.QueryJobStatuses(scheduler.JobStatusQuery{
+		Offset: 1,
+		Limit:  2,
+	})
+
+	if gotIDs := collectStatusIDs(paged); !slices.Equal(gotIDs, []string{"job-2", "job-3"}) {
+		t.Fatalf("expected paged IDs [job-2 job-3], got %v", gotIDs)
+	}
+
+	negativeOffset := sched.QueryJobStatuses(scheduler.JobStatusQuery{
+		Offset: -1,
+		Limit:  1,
+	})
+
+	if gotIDs := collectStatusIDs(negativeOffset); !slices.Equal(gotIDs, []string{"job-1"}) {
+		t.Fatalf("expected negative-offset query to start at first ID [job-1], got %v", gotIDs)
+	}
+
+	outOfRange := sched.QueryJobStatuses(scheduler.JobStatusQuery{
+		Offset: 10,
+	})
+
+	if len(outOfRange) != 0 {
+		t.Fatalf("expected empty result for out-of-range offset, got %d statuses", len(outOfRange))
+	}
+}
+
+func TestSchedulerQueryJobHistoryFiltersAndLimit(t *testing.T) {
+	t.Parallel()
+
+	store := scheduler.NewInMemoryJobsStorage()
+
+	sched := scheduler.NewScheduler(
+		scheduler.WithJobsStorage(store),
+		scheduler.WithURLValidator(nil),
+	)
+	defer sched.Stop()
+
+	const (
+		jobID          = "job-history-query"
+		historySeedRun = 4
+	)
+
+	seedHistoryForQueryTest(t, store, jobID, historySeedRun)
+
+	assertHistoryQuerySequences(
+		t,
+		sched,
+		jobID,
+		scheduler.JobHistoryQuery{FromSequence: 3},
+		[]int{3, 4},
+		"from sequence query",
+	)
+	assertHistoryQuerySequences(
+		t,
+		sched,
+		jobID,
+		scheduler.JobHistoryQuery{Limit: 2},
+		[]int{3, 4},
+		"limited query",
+	)
+	assertHistoryQuerySequences(
+		t,
+		sched,
+		jobID,
+		scheduler.JobHistoryQuery{
+			FromSequence: 2,
+			Limit:        1,
+		},
+		[]int{4},
+		"from sequence + limited query",
+	)
+
+	emptyAfterSequence, ok := sched.QueryJobHistory(jobID, scheduler.JobHistoryQuery{FromSequence: 99})
+	if !ok || len(emptyAfterSequence) != 0 {
+		t.Fatalf("expected empty history with ok=true for out-of-range sequence, got ok=%t len=%d", ok, len(emptyAfterSequence))
+	}
+
+	missingHistory, ok := sched.QueryJobHistory("missing-job", scheduler.JobHistoryQuery{})
+	if ok || missingHistory != nil {
+		t.Fatalf("expected no history for missing job, got ok=%t len=%d", ok, len(missingHistory))
+	}
+}
+
 func TestSchedulerStatusRemoved(t *testing.T) {
 	t.Parallel()
 
@@ -493,18 +633,18 @@ func TestSchedulerDuplicateIDUsesJobsStorage(t *testing.T) {
 
 	const jobID = "job-custom-storage"
 
+	sched := scheduler.NewScheduler(
+		scheduler.WithJobsStorage(store),
+		scheduler.WithURLValidator(nil),
+	)
+	defer sched.Stop()
+
 	err := store.Save(scheduler.Job{
 		ID: jobID,
 	})
 	if err != nil {
 		t.Fatalf("failed to seed custom storage: %v", err)
 	}
-
-	sched := scheduler.NewScheduler(
-		scheduler.WithJobsStorage(store),
-		scheduler.WithURLValidator(nil),
-	)
-	defer sched.Stop()
 
 	_, err = sched.Schedule(scheduler.Job{
 		ID: jobID,
@@ -586,7 +726,7 @@ func TestSchedulerLogsStorageWriteFailureOnRemove(t *testing.T) {
 		t.Fatalf("expected remove to succeed for %q", jobID)
 	}
 
-	waitForLogSubstring(t, logBuffer, "scheduler storage write failed")
+	waitForLogSubstring(t, logBuffer, schedulerStorageWriteLog)
 	waitForLogSubstring(t, logBuffer, "operation=mark removed job_id="+jobID)
 }
 
@@ -639,7 +779,7 @@ func TestSchedulerStorageExecutionWriteFailureLogsAndContinues(t *testing.T) {
 		t.Fatal("timed out waiting for request execution")
 	}
 
-	waitForLogSubstring(t, logBuffer, "scheduler storage write failed")
+	waitForLogSubstring(t, logBuffer, schedulerStorageWriteLog)
 	waitForLogSubstring(t, logBuffer, "operation=mark execution start")
 	waitForLogSubstring(t, logBuffer, "operation=record execution result")
 }
@@ -1006,6 +1146,164 @@ func TestSchedulerLoggerWarnsOnCallbackRequestFailure(t *testing.T) {
 	assertSchedulerLogsCallbackFailure(t, "://invalid-callback-url", "callback request failed")
 }
 
+func TestSchedulerLoggerWarnsOnCallbackResponseDrainFailure(t *testing.T) {
+	t.Parallel()
+
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			switch req.URL.Path {
+			case targetPath:
+				return newStubOKResponse("ok", nil, nil), nil
+			case callbackPath:
+				return newStubOKResponse("", scheduler.ErrInvalidJob, nil), nil
+			default:
+				return nil, errUnexpectedRequestPath
+			}
+		}),
+	}
+
+	assertSchedulerLogsWithHTTPClient(
+		t,
+		client,
+		schedulerLogTestBaseURL+callbackPath,
+		"callback response drain failed",
+	)
+}
+
+func TestSchedulerLoggerWarnsOnCallbackResponseCloseFailure(t *testing.T) {
+	t.Parallel()
+
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			switch req.URL.Path {
+			case targetPath:
+				return newStubOKResponse("ok", nil, nil), nil
+			case callbackPath:
+				return newStubOKResponse("ok", nil, scheduler.ErrInvalidJob), nil
+			default:
+				return nil, errUnexpectedRequestPath
+			}
+		}),
+	}
+
+	assertSchedulerLogsWithHTTPClient(
+		t,
+		client,
+		schedulerLogTestBaseURL+callbackPath,
+		"callback response close failed",
+	)
+}
+
+func TestSchedulerLoggerWarnsOnResponseBodyReadFailure(t *testing.T) {
+	t.Parallel()
+
+	client := &http.Client{
+		Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+			return newStubOKResponse("", scheduler.ErrInvalidJob, nil), nil
+		}),
+	}
+
+	assertSchedulerLogsWithHTTPClient(
+		t,
+		client,
+		"",
+		"response body read failed",
+	)
+}
+
+func TestSchedulerLoggerWarnsOnResponseBodyCloseFailure(t *testing.T) {
+	t.Parallel()
+
+	client := &http.Client{
+		Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+			return newStubOKResponse("ok", nil, scheduler.ErrInvalidJob), nil
+		}),
+	}
+
+	assertSchedulerLogsWithHTTPClient(
+		t,
+		client,
+		"",
+		"response body close failed",
+	)
+}
+
+func TestSchedulerLogsStorageWriteFailureOnMarkTerminal(t *testing.T) {
+	t.Parallel()
+
+	store := newFailingJobsStorage()
+	store.failMarkTerminal = scheduler.ErrInvalidJob
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	logBuffer := &lockedBuffer{}
+	logger := slog.New(slog.NewTextHandler(logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	sched := scheduler.NewScheduler(
+		scheduler.WithLogger(logger),
+		scheduler.WithJobsStorage(store),
+		scheduler.WithHTTPClient(server.Client()),
+		scheduler.WithURLValidator(newTestURLValidator(t)),
+	)
+	defer sched.Stop()
+
+	_, err := sched.Schedule(scheduler.Job{
+		Schedule: scheduler.Schedule{
+			Every:   5 * time.Millisecond,
+			MaxRuns: 1,
+		},
+		Request: scheduler.Request{
+			Method: http.MethodGet,
+			URL:    server.URL + targetPath,
+		},
+	})
+	if err != nil {
+		t.Fatalf(scheduleJobError, err)
+	}
+
+	waitForLogSubstring(t, logBuffer, schedulerStorageWriteLog)
+	waitForLogSubstring(t, logBuffer, "operation=mark terminal")
+}
+
+func TestSchedulerLogsStorageWriteFailureOnMarkStopped(t *testing.T) {
+	t.Parallel()
+
+	store := newFailingJobsStorage()
+	store.failMarkTerminal = scheduler.ErrInvalidJob
+
+	logBuffer := &lockedBuffer{}
+	logger := slog.New(slog.NewTextHandler(logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	sched := scheduler.NewScheduler(
+		scheduler.WithLogger(logger),
+		scheduler.WithJobsStorage(store),
+		scheduler.WithURLValidator(nil),
+	)
+
+	_, err := sched.Schedule(scheduler.Job{
+		Schedule: scheduler.Schedule{
+			Every:   time.Second,
+			StartAt: time.Now().Add(500 * time.Millisecond),
+			MaxRuns: 1,
+		},
+		Request: scheduler.Request{
+			Method: http.MethodGet,
+			URL:    schedulerLogTestBaseURL + targetPath,
+		},
+	})
+	if err != nil {
+		t.Fatalf(scheduleJobError, err)
+	}
+
+	sched.Stop()
+
+	waitForLogSubstring(t, logBuffer, schedulerStorageWriteLog)
+	waitForLogSubstring(t, logBuffer, "operation=mark stopped")
+}
+
 func assertSchedulerLogsCallbackFailure(
 	t *testing.T,
 	callbackURL string,
@@ -1035,6 +1333,44 @@ func assertSchedulerLogsCallbackFailure(
 		Request: scheduler.Request{
 			Method: http.MethodGet,
 			URL:    target.URL,
+		},
+		Callback: scheduler.Callback{
+			URL: callbackURL,
+		},
+	})
+	if err != nil {
+		t.Fatalf(scheduleJobError, err)
+	}
+
+	waitForLogSubstring(t, logBuffer, wantLog)
+}
+
+func assertSchedulerLogsWithHTTPClient(
+	t *testing.T,
+	client *http.Client,
+	callbackURL string,
+	wantLog string,
+) {
+	t.Helper()
+
+	logBuffer := &lockedBuffer{}
+	logger := slog.New(slog.NewTextHandler(logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	sched := scheduler.NewScheduler(
+		scheduler.WithLogger(logger),
+		scheduler.WithHTTPClient(client),
+		scheduler.WithURLValidator(nil),
+	)
+	defer sched.Stop()
+
+	_, err := sched.Schedule(scheduler.Job{
+		Schedule: scheduler.Schedule{
+			Every:   5 * time.Millisecond,
+			MaxRuns: 1,
+		},
+		Request: scheduler.Request{
+			Method: http.MethodGet,
+			URL:    schedulerLogTestBaseURL + targetPath,
 		},
 		Callback: scheduler.Callback{
 			URL: callbackURL,
@@ -1230,6 +1566,50 @@ func assertCallbackBodyLimitedPayload(t *testing.T, payload scheduler.CallbackPa
 	}
 }
 
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+type stubReadCloser struct {
+	body     []byte
+	offset   int
+	readErr  error
+	closeErr error
+}
+
+func newStubOKResponse(body string, readErr, closeErr error) *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body: &stubReadCloser{
+			body:     []byte(body),
+			readErr:  readErr,
+			closeErr: closeErr,
+		},
+	}
+}
+
+func (s *stubReadCloser) Read(buffer []byte) (int, error) {
+	if s.readErr != nil {
+		return 0, s.readErr
+	}
+
+	if s.offset >= len(s.body) {
+		return 0, io.EOF
+	}
+
+	n := copy(buffer, s.body[s.offset:])
+	s.offset += n
+
+	return n, nil
+}
+
+func (s *stubReadCloser) Close() error {
+	return s.closeErr
+}
+
 type lockedBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
@@ -1267,6 +1647,70 @@ func waitForLogSubstring(t *testing.T, buf *lockedBuffer, want string) {
 	}
 
 	t.Fatalf("timed out waiting for log containing %q; logs=%q", want, buf.String())
+}
+
+func collectStatusIDs(statuses []scheduler.JobStatus) []string {
+	ids := make([]string, 0, len(statuses))
+	for _, status := range statuses {
+		ids = append(ids, status.JobID)
+	}
+
+	return ids
+}
+
+func collectHistorySequences(history []scheduler.JobRun) []int {
+	sequences := make([]int, 0, len(history))
+	for _, run := range history {
+		sequences = append(sequences, run.Sequence)
+	}
+
+	return sequences
+}
+
+func seedHistoryForQueryTest(
+	t *testing.T,
+	store scheduler.JobsStorage,
+	jobID string,
+	runCount int,
+) {
+	t.Helper()
+
+	err := store.UpsertStatus(jobID, scheduler.JobStateScheduled)
+	if err != nil {
+		t.Fatalf("failed to seed status for history query job: %v", err)
+	}
+
+	for attempt := 1; attempt <= runCount; attempt++ {
+		err = store.RecordExecutionResult(jobID, scheduler.CallbackPayload{
+			JobID:      jobID,
+			Attempts:   attempt,
+			Success:    true,
+			StatusCode: http.StatusOK,
+		}, 10)
+		if err != nil {
+			t.Fatalf("failed to seed execution result #%d: %v", attempt, err)
+		}
+	}
+}
+
+func assertHistoryQuerySequences(
+	t *testing.T,
+	sched *scheduler.Scheduler,
+	jobID string,
+	query scheduler.JobHistoryQuery,
+	want []int,
+	scenario string,
+) {
+	t.Helper()
+
+	history, ok := sched.QueryJobHistory(jobID, query)
+	if !ok {
+		t.Fatalf("expected history for %q during %s", jobID, scenario)
+	}
+
+	if got := collectHistorySequences(history); !slices.Equal(got, want) {
+		t.Fatalf("expected history sequences %v during %s, got %v", want, scenario, got)
+	}
 }
 
 type trackingJobsStorage struct {
