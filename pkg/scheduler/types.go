@@ -95,3 +95,17 @@ type JobRun struct {
 	Sequence int
 	Payload  CallbackPayload
 }
+
+// JobStatusQuery configures filtered status reads.
+type JobStatusQuery struct {
+	IDs    []string
+	States []JobState
+	Offset int
+	Limit  int
+}
+
+// JobHistoryQuery configures bounded history reads.
+type JobHistoryQuery struct {
+	FromSequence int
+	Limit        int
+}

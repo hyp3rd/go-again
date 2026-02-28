@@ -223,6 +223,21 @@ if ok {
   fmt.Println("run#", run.Sequence, "status:", run.Payload.StatusCode, "success:", run.Payload.Success)
  }
 }
+
+filtered := s.QueryJobStatuses(scheduler.JobStatusQuery{
+ States: []scheduler.JobState{scheduler.JobStateRunning, scheduler.JobStateScheduled},
+ Offset: 0,
+ Limit:  50,
+})
+fmt.Println("filtered statuses:", len(filtered))
+
+recentRuns, ok := s.QueryJobHistory(jobID, scheduler.JobHistoryQuery{
+ FromSequence: 10,
+ Limit:        5,
+})
+if ok {
+ fmt.Println("recent retained runs:", len(recentRuns))
+}
 ```
 
 ### Example: Durable Scheduler State with SQLite
@@ -283,7 +298,7 @@ defer s.Stop()
 - `WithJobsStorage(storage)` sets pluggable scheduler state storage (active jobs plus status/history; default: in-memory).
 - `WithHistoryLimit(limit)` sets retained per-job history length (default `20`).
 - `WithURLValidator(validator)` overrides URL validation. Pass `nil` to disable validation.
-- `NewSchedulerWithError(...)` returns constructor errors (including default URL validator initialization failure).
+- `NewSchedulerWithError(...)` returns constructor errors (including startup state reconciliation failures and default URL validator initialization failure).
 
 ### Scheduler Behavior Notes
 
@@ -298,9 +313,14 @@ defer s.Stop()
 - `NewSchedulerWithError(...)` should be preferred for fail-closed startup behavior in security-sensitive paths.
 - `JobCount()` and `JobIDs()` provide lightweight read-only scheduler introspection.
 - `JobStatus(id)`, `JobStatuses()`, and `JobHistory(id)` provide status and retained run history snapshots.
+- `QueryJobStatuses(JobStatusQuery)` adds ID/state filters with pagination (`Offset`, `Limit`) over status snapshots.
+- `QueryJobHistory(id, JobHistoryQuery)` adds history filtering (`FromSequence`) and tail limiting (`Limit`) while preserving ascending sequence order.
 - Default `InMemoryJobsStorage` is process-local; use `WithJobsStorage(...)` for custom durable/backed storage.
 - `NewSQLiteJobsStorage(path)` provides a built-in durable storage implementation for `WithJobsStorage(...)`; call `Close()` when finished.
+- On scheduler startup, recovered active-job registrations from storage are reconciled: `scheduled`/`running` states are marked `canceled`, then active-job IDs are cleared. Jobs are not auto-resumed.
 - Non-fatal storage write failures during runtime transitions are logged (warn) and execution continues.
+- Non-fatal request/callback response body read/close failures are logged (warn) and execution continues.
+- `NewSchedulerWithError(...)` fails constructor-time reconciliation errors; `NewScheduler()` logs a warning and continues.
 - `NewScheduler()` logs a warning and continues if default URL validator initialization fails; use `NewSchedulerWithError()` to fail closed.
 
 ### Custom URL Validation (Allow Local HTTPS)

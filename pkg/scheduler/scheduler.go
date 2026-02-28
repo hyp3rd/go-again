@@ -26,6 +26,7 @@ const (
 	defaultCallbackMethod      = http.MethodPost
 	defaultCallbackMaxBodySize = 4096
 	defaultHistoryLimit        = 20
+	logFieldError              = "error"
 )
 
 //nolint:gochecknoglobals // test seam for simulating default validator initialization failures.
@@ -61,18 +62,28 @@ type Scheduler struct {
 func NewScheduler(opts ...Option) *Scheduler {
 	schedulerInstance, err := NewSchedulerWithError(opts...)
 	if err != nil && schedulerInstance != nil && schedulerInstance.logger != nil {
-		schedulerInstance.logger.Log(
-			schedulerInstance.ctx,
-			slog.LevelWarn,
-			"default URL validator initialization failed; URL validation disabled unless overridden",
-			slog.Any("error", err),
-		)
+		if errors.Is(err, ErrURLValidatorInitialization) {
+			schedulerInstance.logger.Log(
+				schedulerInstance.ctx,
+				slog.LevelWarn,
+				"default URL validator initialization failed; URL validation disabled unless overridden",
+				slog.Any(logFieldError, err),
+			)
+		} else {
+			schedulerInstance.logger.Log(
+				schedulerInstance.ctx,
+				slog.LevelWarn,
+				"scheduler initialization failed; state reconciliation skipped",
+				slog.Any(logFieldError, err),
+			)
+		}
 	}
 
 	return schedulerInstance
 }
 
-// NewSchedulerWithError creates a scheduler and returns an error when default URL validator initialization fails.
+// NewSchedulerWithError creates a scheduler and returns constructor-time errors.
+// It fails when recovered storage state reconciliation fails or when default URL validator initialization fails.
 // If WithURLValidator is provided (including nil), default validator initialization is skipped.
 func NewSchedulerWithError(opts ...Option) (*Scheduler, error) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -88,6 +99,11 @@ func NewSchedulerWithError(opts ...Option) (*Scheduler, error) {
 
 	for _, opt := range opts {
 		opt(schedulerInstance)
+	}
+
+	err := schedulerInstance.reconcileRecoveredState()
+	if err != nil {
+		return schedulerInstance, err
 	}
 
 	if schedulerInstance.urlValidatorConfigured {
@@ -230,6 +246,119 @@ func (s *Scheduler) JobStatuses() []JobStatus {
 // JobHistory returns retained execution history for a job.
 func (s *Scheduler) JobHistory(id string) ([]JobRun, bool) {
 	return s.jobsStorage.History(id)
+}
+
+// QueryJobStatuses returns status snapshots filtered by job IDs and/or states.
+// Results are always sorted by job ID and then paginated via Offset/Limit.
+func (s *Scheduler) QueryJobStatuses(query JobStatusQuery) []JobStatus {
+	statuses := s.jobsStorage.Statuses()
+	if len(statuses) == 0 {
+		return []JobStatus{}
+	}
+
+	idFilter := makeIDFilter(query.IDs)
+	stateFilter := makeStateFilter(query.States)
+
+	filtered := make([]JobStatus, 0, len(statuses))
+	for _, status := range statuses {
+		if len(idFilter) > 0 {
+			if _, ok := idFilter[status.JobID]; !ok {
+				continue
+			}
+		}
+
+		if len(stateFilter) > 0 {
+			if _, ok := stateFilter[status.State]; !ok {
+				continue
+			}
+		}
+
+		filtered = append(filtered, status)
+	}
+
+	offset := max(query.Offset, 0)
+
+	if offset >= len(filtered) {
+		return []JobStatus{}
+	}
+
+	end := len(filtered)
+	if query.Limit > 0 && offset+query.Limit < end {
+		end = offset + query.Limit
+	}
+
+	return append([]JobStatus(nil), filtered[offset:end]...)
+}
+
+// QueryJobHistory returns retained execution history for a job with optional sequence and limit filters.
+// Returned runs preserve ascending sequence order.
+func (s *Scheduler) QueryJobHistory(id string, query JobHistoryQuery) ([]JobRun, bool) {
+	history, ok := s.jobsStorage.History(id)
+	if !ok {
+		return nil, false
+	}
+
+	filtered := history
+	if query.FromSequence > 0 {
+		filtered = make([]JobRun, 0, len(history))
+		for _, run := range history {
+			if run.Sequence >= query.FromSequence {
+				filtered = append(filtered, run)
+			}
+		}
+	}
+
+	if query.Limit > 0 && len(filtered) > query.Limit {
+		filtered = filtered[len(filtered)-query.Limit:]
+	}
+
+	return append([]JobRun(nil), filtered...), true
+}
+
+func makeIDFilter(ids []string) map[string]struct{} {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	filter := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		filter[id] = struct{}{}
+	}
+
+	return filter
+}
+
+func makeStateFilter(states []JobState) map[JobState]struct{} {
+	if len(states) == 0 {
+		return nil
+	}
+
+	filter := make(map[JobState]struct{}, len(states))
+	for _, state := range states {
+		filter[state] = struct{}{}
+	}
+
+	return filter
+}
+
+func (s *Scheduler) reconcileRecoveredState() error {
+	ids := s.jobsStorage.IDs()
+
+	for _, id := range ids {
+		// Scheduler runtime registrations are not resumed automatically after process restart.
+		// Persisted scheduled/running jobs are reconciled to canceled status and then removed from active storage.
+		state, ok := s.jobsStorage.State(id)
+		if ok && (state == JobStateScheduled || state == JobStateRunning) {
+			err := s.jobsStorage.MarkTerminal(id, JobStateCanceled)
+			if err != nil {
+				return ewrap.Wrapf(ErrStorageOperation, "mark recovered job canceled failed: id=%s err=%v", id, err)
+			}
+		}
+
+		_ = s.jobsStorage.Delete(id)
+	}
+
+	return nil
 }
 
 func (s *Scheduler) nextID() string {
@@ -684,12 +813,12 @@ func (s *Scheduler) logError(msg string, err error) {
 	}
 
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		s.logger.Log(s.ctx, slog.LevelDebug, msg, slog.Any("error", err))
+		s.logger.Log(s.ctx, slog.LevelDebug, msg, slog.Any(logFieldError, err))
 
 		return
 	}
 
-	s.logger.Log(s.ctx, slog.LevelWarn, msg, slog.Any("error", err))
+	s.logger.Log(s.ctx, slog.LevelWarn, msg, slog.Any(logFieldError, err))
 }
 
 func (s *Scheduler) finalizeJobState(id string, state JobState) {
