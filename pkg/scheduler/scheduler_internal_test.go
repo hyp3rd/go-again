@@ -22,7 +22,7 @@ func TestNewSchedulerWithError_DefaultURLValidatorFailure(t *testing.T) {
 	})
 	defer restore()
 
-	sched, err := NewSchedulerWithError()
+	sched, err := NewSchedulerWithError(t.Context())
 	if sched == nil {
 		t.Fatal(expectedSchedulerInstanceMsg)
 	}
@@ -39,7 +39,7 @@ func TestNewSchedulerWithError_ExplicitNilValidatorSkipsDefaultInitialization(t 
 	})
 	defer restore()
 
-	sched, err := NewSchedulerWithError(WithURLValidator(nil))
+	sched, err := NewSchedulerWithError(t.Context(), WithURLValidator(nil))
 	if err != nil {
 		t.Fatalf("expected nil error when validator is explicitly disabled, got %v", err)
 	}
@@ -63,7 +63,7 @@ func TestNewScheduler_WarnsWhenDefaultURLValidatorFails(t *testing.T) {
 	logBuffer := &lockedLogBuffer{}
 	logger := slog.New(slog.NewTextHandler(logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-	sched := NewScheduler(WithLogger(logger))
+	sched := NewScheduler(t.Context(), WithLogger(logger))
 	if sched == nil {
 		t.Fatal(expectedSchedulerInstanceMsg)
 	}
@@ -85,10 +85,11 @@ func TestSchedulerLogErrorWarnLevel(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	sched := NewScheduler(
+		t.Context(),
 		WithLogger(logger),
 		WithURLValidator(nil),
 	)
-	defer sched.Stop()
+	defer sched.Stop(t.Context())
 
 	sched.logError("warn-path", ErrInvalidJob)
 
@@ -105,10 +106,11 @@ func TestSchedulerLogErrorDebugLevelOnContextCancellation(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	sched := NewScheduler(
+		t.Context(),
 		WithLogger(logger),
 		WithURLValidator(nil),
 	)
-	defer sched.Stop()
+	defer sched.Stop(t.Context())
 
 	sched.logError("debug-path", context.Canceled)
 
@@ -125,10 +127,11 @@ func TestSchedulerLogErrorIgnoresNilError(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	sched := NewScheduler(
+		t.Context(),
 		WithLogger(logger),
 		WithURLValidator(nil),
 	)
-	defer sched.Stop()
+	defer sched.Stop(t.Context())
 
 	sched.logError("ignored", nil)
 
@@ -148,22 +151,23 @@ func TestNewSchedulerWithError_ReconcilesRecoveredState(t *testing.T) {
 
 	storage := NewInMemoryJobsStorage()
 
-	err := seedRecoveredJobForTest(storage, scheduledJobID, JobStateScheduled)
+	err := seedRecoveredJobForTest(t.Context(), storage, scheduledJobID, JobStateScheduled)
 	if err != nil {
 		t.Fatalf("failed to seed scheduled recovered job: %v", err)
 	}
 
-	err = seedRecoveredJobForTest(storage, runningJobID, JobStateRunning)
+	err = seedRecoveredJobForTest(t.Context(), storage, runningJobID, JobStateRunning)
 	if err != nil {
 		t.Fatalf("failed to seed running recovered job: %v", err)
 	}
 
-	err = seedRecoveredJobForTest(storage, completedJobID, JobStateCompleted)
+	err = seedRecoveredJobForTest(t.Context(), storage, completedJobID, JobStateCompleted)
 	if err != nil {
 		t.Fatalf("failed to seed completed recovered job: %v", err)
 	}
 
 	sched, err := NewSchedulerWithError(
+		t.Context(),
 		WithJobsStorage(storage),
 		WithURLValidator(nil),
 	)
@@ -175,17 +179,17 @@ func TestNewSchedulerWithError_ReconcilesRecoveredState(t *testing.T) {
 		t.Fatal(expectedSchedulerInstanceMsg)
 	}
 
-	defer sched.Stop()
+	defer sched.Stop(t.Context())
 
-	if got := sched.JobCount(); got != 0 {
+	if got := sched.JobCount(t.Context()); got != 0 {
 		t.Fatalf("expected zero active jobs after reconciliation, got %d", got)
 	}
 
-	if gotIDs := sched.JobIDs(); len(gotIDs) != 0 {
+	if gotIDs := sched.JobIDs(t.Context()); len(gotIDs) != 0 {
 		t.Fatalf("expected no active job IDs after reconciliation, got %v", gotIDs)
 	}
 
-	scheduledStatus, ok := sched.JobStatus(scheduledJobID)
+	scheduledStatus, ok := sched.JobStatus(t.Context(), scheduledJobID)
 	if !ok {
 		t.Fatalf("expected status for %q to exist", scheduledJobID)
 	}
@@ -194,7 +198,7 @@ func TestNewSchedulerWithError_ReconcilesRecoveredState(t *testing.T) {
 		t.Fatalf("expected %q to be canceled after reconciliation, got %q", scheduledJobID, scheduledStatus.State)
 	}
 
-	runningStatus, ok := sched.JobStatus(runningJobID)
+	runningStatus, ok := sched.JobStatus(t.Context(), runningJobID)
 	if !ok {
 		t.Fatalf("expected status for %q to exist", runningJobID)
 	}
@@ -203,7 +207,7 @@ func TestNewSchedulerWithError_ReconcilesRecoveredState(t *testing.T) {
 		t.Fatalf("expected %q to be canceled after reconciliation, got %q", runningJobID, runningStatus.State)
 	}
 
-	completedStatus, ok := sched.JobStatus(completedJobID)
+	completedStatus, ok := sched.JobStatus(t.Context(), completedJobID)
 	if !ok {
 		t.Fatalf("expected status for %q to exist", completedJobID)
 	}
@@ -218,7 +222,7 @@ func TestNewSchedulerWithError_ReconcileFailureReturnsStorageError(t *testing.T)
 
 	storage := NewInMemoryJobsStorage()
 
-	err := seedRecoveredJobForTest(storage, "scheduled-job", JobStateScheduled)
+	err := seedRecoveredJobForTest(t.Context(), storage, "scheduled-job", JobStateScheduled)
 	if err != nil {
 		t.Fatalf("failed to seed recovered job: %v", err)
 	}
@@ -229,6 +233,7 @@ func TestNewSchedulerWithError_ReconcileFailureReturnsStorageError(t *testing.T)
 	}
 
 	sched, err := NewSchedulerWithError(
+		t.Context(),
 		WithJobsStorage(failingStorage),
 		WithURLValidator(nil),
 	)
@@ -246,7 +251,7 @@ func TestNewScheduler_WarnsWhenStateReconciliationFails(t *testing.T) {
 
 	storage := NewInMemoryJobsStorage()
 
-	err := seedRecoveredJobForTest(storage, "scheduled-job", JobStateScheduled)
+	err := seedRecoveredJobForTest(t.Context(), storage, "scheduled-job", JobStateScheduled)
 	if err != nil {
 		t.Fatalf("failed to seed recovered job: %v", err)
 	}
@@ -260,6 +265,7 @@ func TestNewScheduler_WarnsWhenStateReconciliationFails(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	sched := NewScheduler(
+		t.Context(),
 		WithLogger(logger),
 		WithJobsStorage(failingStorage),
 		WithURLValidator(nil),
@@ -268,7 +274,7 @@ func TestNewScheduler_WarnsWhenStateReconciliationFails(t *testing.T) {
 		t.Fatal(expectedSchedulerInstanceMsg)
 	}
 
-	defer sched.Stop()
+	defer sched.Stop(t.Context())
 
 	logs := logBuffer.String()
 	if !strings.Contains(logs, "level=WARN") ||
@@ -315,21 +321,21 @@ type failingReconcileJobsStorage struct {
 	failMarkTerminal error
 }
 
-func (s *failingReconcileJobsStorage) MarkTerminal(id string, state JobState) error {
+func (s *failingReconcileJobsStorage) MarkTerminal(ctx context.Context, id string, state JobState) error {
 	if s.failMarkTerminal != nil {
 		return s.failMarkTerminal
 	}
 
-	return s.JobsStorage.MarkTerminal(id, state)
+	return s.JobsStorage.MarkTerminal(ctx, id, state)
 }
 
-func seedRecoveredJobForTest(storage JobsStorage, id string, state JobState) error {
-	err := storage.Save(Job{
+func seedRecoveredJobForTest(ctx context.Context, storage JobsStorage, id string, state JobState) error {
+	err := storage.Save(ctx, Job{
 		ID: id,
 	})
 	if err != nil {
 		return err
 	}
 
-	return storage.UpsertStatus(id, state)
+	return storage.UpsertStatus(ctx, id, state)
 }

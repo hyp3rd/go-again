@@ -20,7 +20,11 @@ func main() {
 	dbPath := filepath.Join(os.TempDir(), "go-again-scheduler-example.db")
 	_ = os.Remove(dbPath)
 
-	storage, err := scheduler.NewSQLiteJobsStorage(dbPath)
+	storage, err := scheduler.NewSQLiteJobsStorageWithOptions(
+		dbPath,
+		scheduler.WithSQLiteHistoryMaxAge(24*time.Hour),
+		scheduler.WithSQLiteHistoryMaxRowsPerJob(100),
+	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "create sqlite storage failed: %v\n", err)
 
@@ -62,7 +66,15 @@ func main() {
 	for time.Now().Before(deadline) {
 		status, ok := s.JobStatus(jobID)
 		if ok && status.State == scheduler.JobStateCompleted {
+			pruned, pruneErr := storage.PruneHistory()
+			if pruneErr != nil {
+				fmt.Fprintf(os.Stderr, "prune history failed: %v\n", pruneErr)
+
+				return
+			}
+
 			fmt.Printf("completed: job=%s runs=%d\n", jobID, status.Runs)
+			fmt.Printf("pruned history rows: %d\n", pruned)
 
 			return
 		}

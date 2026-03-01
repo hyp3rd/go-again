@@ -60,19 +60,19 @@ type Scheduler struct {
 }
 
 // NewScheduler creates a scheduler with the provided options.
-func NewScheduler(opts ...Option) *Scheduler {
-	schedulerInstance, err := NewSchedulerWithError(opts...)
+func NewScheduler(ctx context.Context, opts ...Option) *Scheduler {
+	schedulerInstance, err := NewSchedulerWithError(ctx, opts...)
 	if err != nil && schedulerInstance != nil && schedulerInstance.logger != nil {
 		if errors.Is(err, ErrURLValidatorInitialization) {
 			schedulerInstance.logger.Log(
-				schedulerInstance.ctx,
+				ctx,
 				slog.LevelWarn,
 				"default URL validator initialization failed; URL validation disabled unless overridden",
 				slog.Any(logFieldError, err),
 			)
 		} else {
 			schedulerInstance.logger.Log(
-				schedulerInstance.ctx,
+				ctx,
 				slog.LevelWarn,
 				"scheduler initialization failed; state reconciliation skipped",
 				slog.Any(logFieldError, err),
@@ -86,8 +86,8 @@ func NewScheduler(opts ...Option) *Scheduler {
 // NewSchedulerWithError creates a scheduler and returns constructor-time errors.
 // It fails when recovered storage state reconciliation fails or when default URL validator initialization fails.
 // If WithURLValidator is provided (including nil), default validator initialization is skipped.
-func NewSchedulerWithError(opts ...Option) (*Scheduler, error) {
-	ctx, cancel := context.WithCancel(context.Background())
+func NewSchedulerWithError(ctx context.Context, opts ...Option) (*Scheduler, error) {
+	ctx, cancel := context.WithCancel(ctx)
 	schedulerInstance := &Scheduler{
 		jobs:         make(map[string]*jobEntry),
 		jobsStorage:  NewInMemoryJobsStorage(),
@@ -102,7 +102,7 @@ func NewSchedulerWithError(opts ...Option) (*Scheduler, error) {
 		opt(schedulerInstance)
 	}
 
-	err := schedulerInstance.reconcileRecoveredState()
+	err := schedulerInstance.reconcileRecoveredState(ctx)
 	if err != nil {
 		return schedulerInstance, err
 	}
@@ -122,7 +122,7 @@ func NewSchedulerWithError(opts ...Option) (*Scheduler, error) {
 }
 
 // Schedule registers a job and starts its schedule loop.
-func (s *Scheduler) Schedule(job Job) (string, error) {
+func (s *Scheduler) Schedule(ctx context.Context, job Job) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -136,14 +136,14 @@ func (s *Scheduler) Schedule(job Job) (string, error) {
 	}
 
 	if normalized.ID == "" {
-		normalized.ID = s.nextID()
+		normalized.ID = s.nextID(ctx)
 	}
 
 	if _, exists := s.jobs[normalized.ID]; exists {
 		return "", ewrap.Wrapf(ErrInvalidJob, "job id already exists: %s", normalized.ID)
 	}
 
-	err = s.jobsStorage.Save(normalized)
+	err = s.jobsStorage.Save(ctx, normalized)
 	if err != nil {
 		if errors.Is(err, errJobAlreadyExists) {
 			return "", ewrap.Wrapf(ErrInvalidJob, "job id already exists: %s", normalized.ID)
@@ -152,14 +152,14 @@ func (s *Scheduler) Schedule(job Job) (string, error) {
 		return "", ewrap.Wrapf(ErrStorageOperation, "job storage save failed: %v", err)
 	}
 
-	err = s.jobsStorage.UpsertStatus(normalized.ID, JobStateScheduled)
+	err = s.jobsStorage.UpsertStatus(ctx, normalized.ID, JobStateScheduled)
 	if err != nil {
-		_ = s.jobsStorage.Delete(normalized.ID)
+		_ = s.jobsStorage.Delete(ctx, normalized.ID)
 
 		return "", ewrap.Wrapf(ErrStorageOperation, "job status upsert failed: %v", err)
 	}
 
-	ctx, cancelCause := context.WithCancelCause(s.ctx)
+	jobCtx, cancelCause := context.WithCancelCause(ctx)
 	cancel := func() {
 		cancelCause(nil)
 	}
@@ -175,14 +175,14 @@ func (s *Scheduler) Schedule(job Job) (string, error) {
 	go func() {
 		defer cancel()
 
-		s.runJob(ctx, entry)
+		s.runJob(jobCtx, entry)
 	}()
 
 	return normalized.ID, nil
 }
 
 // Remove stops a scheduled job.
-func (s *Scheduler) Remove(id string) bool {
+func (s *Scheduler) Remove(ctx context.Context, id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -193,9 +193,9 @@ func (s *Scheduler) Remove(id string) bool {
 
 	entry.cancel()
 	delete(s.jobs, id)
-	_ = s.jobsStorage.Delete(id)
+	_ = s.jobsStorage.Delete(ctx, id)
 
-	err := s.jobsStorage.MarkRemoved(id)
+	err := s.jobsStorage.MarkRemoved(ctx, id)
 	if err != nil {
 		s.logStorageWriteFailure("mark removed", id, err)
 	}
@@ -204,7 +204,7 @@ func (s *Scheduler) Remove(id string) bool {
 }
 
 // Stop cancels all jobs and waits for completion.
-func (s *Scheduler) Stop() {
+func (s *Scheduler) Stop(ctx context.Context) {
 	s.mu.Lock()
 	if s.stopped {
 		s.mu.Unlock()
@@ -218,9 +218,9 @@ func (s *Scheduler) Stop() {
 
 	for _, entry := range s.jobs {
 		entry.cancel()
-		_ = s.jobsStorage.Delete(entry.job.ID)
+		_ = s.jobsStorage.Delete(ctx, entry.job.ID)
 
-		err := s.jobsStorage.MarkTerminal(entry.job.ID, JobStateStopped)
+		err := s.jobsStorage.MarkTerminal(ctx, entry.job.ID, JobStateStopped)
 		if err != nil {
 			s.logStorageWriteFailure("mark stopped", entry.job.ID, err)
 		}
@@ -233,34 +233,34 @@ func (s *Scheduler) Stop() {
 }
 
 // JobCount returns the number of jobs currently registered in the scheduler.
-func (s *Scheduler) JobCount() int {
-	return s.jobsStorage.Count()
+func (s *Scheduler) JobCount(ctx context.Context) int {
+	return s.jobsStorage.Count(ctx)
 }
 
 // JobIDs returns the currently registered job IDs in sorted order.
-func (s *Scheduler) JobIDs() []string {
-	return s.jobsStorage.IDs()
+func (s *Scheduler) JobIDs(ctx context.Context) []string {
+	return s.jobsStorage.IDs(ctx)
 }
 
 // JobStatus returns the latest known status for a job.
-func (s *Scheduler) JobStatus(id string) (JobStatus, bool) {
-	return s.jobsStorage.Status(id)
+func (s *Scheduler) JobStatus(ctx context.Context, id string) (JobStatus, bool) {
+	return s.jobsStorage.Status(ctx, id)
 }
 
 // JobStatuses returns all known job statuses sorted by job ID.
-func (s *Scheduler) JobStatuses() []JobStatus {
-	return s.jobsStorage.Statuses()
+func (s *Scheduler) JobStatuses(ctx context.Context) []JobStatus {
+	return s.jobsStorage.Statuses(ctx)
 }
 
 // JobHistory returns retained execution history for a job.
-func (s *Scheduler) JobHistory(id string) ([]JobRun, bool) {
-	return s.jobsStorage.History(id)
+func (s *Scheduler) JobHistory(ctx context.Context, id string) ([]JobRun, bool) {
+	return s.jobsStorage.History(ctx, id)
 }
 
 // QueryJobStatuses returns status snapshots filtered by job IDs and/or states.
 // Results are always sorted by job ID and then paginated via Offset/Limit.
-func (s *Scheduler) QueryJobStatuses(query JobStatusQuery) []JobStatus {
-	statuses := s.jobsStorage.Statuses()
+func (s *Scheduler) QueryJobStatuses(ctx context.Context, query JobStatusQuery) []JobStatus {
+	statuses := s.jobsStorage.Statuses(ctx)
 	if len(statuses) == 0 {
 		return []JobStatus{}
 	}
@@ -301,8 +301,8 @@ func (s *Scheduler) QueryJobStatuses(query JobStatusQuery) []JobStatus {
 
 // QueryJobHistory returns retained execution history for a job with optional sequence and limit filters.
 // Returned runs preserve ascending sequence order.
-func (s *Scheduler) QueryJobHistory(id string, query JobHistoryQuery) ([]JobRun, bool) {
-	history, ok := s.jobsStorage.History(id)
+func (s *Scheduler) QueryJobHistory(ctx context.Context, id string, query JobHistoryQuery) ([]JobRun, bool) {
+	history, ok := s.jobsStorage.History(ctx, id)
 	if !ok {
 		return nil, false
 	}
@@ -350,27 +350,27 @@ func makeStateFilter(states []JobState) map[JobState]struct{} {
 	return filter
 }
 
-func (s *Scheduler) reconcileRecoveredState() error {
-	ids := s.jobsStorage.IDs()
+func (s *Scheduler) reconcileRecoveredState(ctx context.Context) error {
+	ids := s.jobsStorage.IDs(ctx)
 
 	for _, id := range ids {
 		// Scheduler runtime registrations are not resumed automatically after process restart.
 		// Persisted scheduled/running jobs are reconciled to canceled status and then removed from active storage.
-		state, ok := s.jobsStorage.State(id)
+		state, ok := s.jobsStorage.State(ctx, id)
 		if ok && (state == JobStateScheduled || state == JobStateRunning) {
-			err := s.jobsStorage.MarkTerminal(id, JobStateCanceled)
+			err := s.jobsStorage.MarkTerminal(ctx, id, JobStateCanceled)
 			if err != nil {
 				return ewrap.Wrapf(ErrStorageOperation, "mark recovered job canceled failed: id=%s err=%v", id, err)
 			}
 		}
 
-		_ = s.jobsStorage.Delete(id)
+		_ = s.jobsStorage.Delete(ctx, id)
 	}
 
 	return nil
 }
 
-func (s *Scheduler) nextID() string {
+func (s *Scheduler) nextID(_ context.Context) string {
 	id := atomic.AddUint64(&s.counter, 1)
 
 	return fmt.Sprintf("job-%d", id)
@@ -396,7 +396,7 @@ func (s *Scheduler) normalizeJob(job Job) (Job, error) {
 
 	job.Callback = callback
 
-	err = ensureRetrier(&job)
+	err = ensureRetrier(s.ctx, &job)
 	if err != nil {
 		return Job{}, err
 	}
@@ -476,12 +476,12 @@ func (s *Scheduler) normalizeCallback(callback Callback) (Callback, error) {
 	return callback, nil
 }
 
-func ensureRetrier(job *Job) error {
+func ensureRetrier(ctx context.Context, job *Job) error {
 	if job.RetryPolicy.Retrier != nil {
 		return nil
 	}
 
-	retrier, err := again.NewRetrier(context.Background())
+	retrier, err := again.NewRetrier(ctx)
 	if err != nil {
 		return ewrap.Wrap(ErrInvalidJob, fmt.Sprintf("failed to create retrier: %v", err))
 	}
@@ -494,20 +494,20 @@ func ensureRetrier(job *Job) error {
 
 func (s *Scheduler) runJob(ctx context.Context, entry *jobEntry) {
 	defer s.wg.Done()
-	defer s.cleanupJob(entry)
+	defer s.cleanupJob(ctx, entry)
 
 	job := entry.job
 
 	terminalState := JobStateCompleted
 
 	defer func() {
-		s.finalizeJobState(job.ID, terminalState)
+		s.finalizeJobState(ctx, job.ID, terminalState)
 	}()
 	defer entry.runsWg.Wait()
 
 	if !job.Schedule.StartAt.IsZero() {
 		if !s.waitUntil(ctx, job.Schedule.StartAt) {
-			terminalState = s.contextTerminalState(job.ID)
+			terminalState = s.contextTerminalState(ctx, job.ID)
 
 			return
 		}
@@ -520,7 +520,7 @@ func (s *Scheduler) runJob(ctx context.Context, entry *jobEntry) {
 
 	for {
 		if ctx.Err() != nil {
-			terminalState = s.contextTerminalState(job.ID)
+			terminalState = s.contextTerminalState(ctx, job.ID)
 
 			return
 		}
@@ -545,7 +545,7 @@ func (s *Scheduler) runJob(ctx context.Context, entry *jobEntry) {
 	}
 }
 
-func (s *Scheduler) cleanupJob(entry *jobEntry) {
+func (s *Scheduler) cleanupJob(ctx context.Context, entry *jobEntry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -555,7 +555,7 @@ func (s *Scheduler) cleanupJob(entry *jobEntry) {
 	}
 
 	delete(s.jobs, entry.job.ID)
-	_ = s.jobsStorage.Delete(entry.job.ID)
+	_ = s.jobsStorage.Delete(ctx, entry.job.ID)
 }
 
 func (*Scheduler) waitUntil(ctx context.Context, when time.Time) bool {
@@ -594,7 +594,7 @@ func (s *Scheduler) enqueue(ctx context.Context, entry *jobEntry, scheduledAt ti
 }
 
 func (s *Scheduler) execute(ctx context.Context, job Job, scheduledAt time.Time) {
-	s.markExecutionStart(job.ID)
+	s.markExecutionStart(ctx, job.ID)
 
 	startedAt := time.Now()
 	retrier, temporaryErrors := job.RetryPolicy.Retrier,
@@ -667,7 +667,7 @@ func (s *Scheduler) execute(ctx context.Context, job Job, scheduledAt time.Time)
 		ResponseBody: string(snapshot.body),
 	}
 
-	s.recordExecutionResult(job.ID, payload)
+	s.recordExecutionResult(ctx, job.ID, payload)
 	s.sendCallback(ctx, job, payload)
 }
 
@@ -834,19 +834,19 @@ func (s *Scheduler) logError(msg string, err error) {
 	s.logger.Log(s.ctx, slog.LevelWarn, msg, slog.Any(logFieldError, err))
 }
 
-func (s *Scheduler) finalizeJobState(id string, state JobState) {
-	err := s.jobsStorage.MarkTerminal(id, state)
+func (s *Scheduler) finalizeJobState(ctx context.Context, id string, state JobState) {
+	err := s.jobsStorage.MarkTerminal(ctx, id, state)
 	if err != nil {
 		s.logStorageWriteFailure("mark terminal", id, err)
 	}
 }
 
-func (s *Scheduler) contextTerminalState(id string) JobState {
+func (s *Scheduler) contextTerminalState(ctx context.Context, id string) JobState {
 	s.mu.Lock()
 	stopped := s.stopped
 	s.mu.Unlock()
 
-	state, ok := s.jobsStorage.State(id)
+	state, ok := s.jobsStorage.State(ctx, id)
 	if ok && state == JobStateRemoved {
 		return JobStateRemoved
 	}
@@ -858,15 +858,15 @@ func (s *Scheduler) contextTerminalState(id string) JobState {
 	return JobStateCanceled
 }
 
-func (s *Scheduler) markExecutionStart(id string) {
-	err := s.jobsStorage.MarkExecutionStart(id)
+func (s *Scheduler) markExecutionStart(ctx context.Context, id string) {
+	err := s.jobsStorage.MarkExecutionStart(ctx, id)
 	if err != nil {
 		s.logStorageWriteFailure("mark execution start", id, err)
 	}
 }
 
-func (s *Scheduler) recordExecutionResult(id string, payload CallbackPayload) {
-	err := s.jobsStorage.RecordExecutionResult(id, payload, s.historyLimit)
+func (s *Scheduler) recordExecutionResult(ctx context.Context, id string, payload CallbackPayload) {
+	err := s.jobsStorage.RecordExecutionResult(ctx, id, payload, s.historyLimit)
 	if err != nil {
 		s.logStorageWriteFailure("record execution result", id, err)
 	}

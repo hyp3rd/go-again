@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -22,6 +23,7 @@ const (
 	contractWorkers         = 24
 	contractSequenceThree   = 3
 	contractSequenceFour    = 4
+	contractRowsPrunedSix   = 6
 	contractStatusCodeOK    = 200
 )
 
@@ -36,6 +38,10 @@ const (
 	contractJobTen       = "job-10"
 	contractJobRemoved   = "job-removed"
 	contractJobTerminal  = "job-terminal"
+	contractJobRetention = "job-retention"
+	contractJobOldA      = "job-old-a"
+	contractJobOldB      = "job-old-b"
+	contractJobRowsOnly  = "job-rows-only"
 	contractMutatedError = "mutated"
 )
 
@@ -64,25 +70,25 @@ func TestSQLiteJobsStoragePersistsAcrossReopen(t *testing.T) {
 
 	dbPath := filepath.Join(t.TempDir(), "scheduler-state.db")
 
-	storage, err := NewSQLiteJobsStorage(dbPath)
+	storage, err := NewSQLiteJobsStorage(t.Context(), dbPath)
 	requireNoError(t, err)
 	t.Cleanup(func() {
 		requireNoError(t, storage.Close())
 	})
 
 	jobID := "job-persisted"
-	requireNoError(t, saveAndUpsertStatus(storage, jobID))
+	requireNoError(t, saveAndUpsertStatus(t.Context(), storage, jobID))
 	seedHistoryRuns(t, storage, jobID, contractCountThree, contractCountThree)
 
 	requireNoError(t, storage.Close())
 
-	reopened, err := NewSQLiteJobsStorage(dbPath)
+	reopened, err := NewSQLiteJobsStorage(t.Context(), dbPath)
 	requireNoError(t, err)
 	t.Cleanup(func() {
 		requireNoError(t, reopened.Close())
 	})
 
-	if got := reopened.Count(); got != 1 {
+	if got := reopened.Count(t.Context()); got != 1 {
 		t.Fatalf("expected 1 persisted job after reopen, got %d", got)
 	}
 
@@ -95,6 +101,125 @@ func TestSQLiteJobsStoragePersistsAcrossReopen(t *testing.T) {
 	if len(history) != contractCountThree {
 		t.Fatalf("expected %d persisted history entries, got %d", contractCountThree, len(history))
 	}
+}
+
+func TestSQLiteJobsStorageRetentionMaxRowsPerJobOption(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "scheduler-retention-max-rows.db")
+
+	storage, err := NewSQLiteJobsStorageWithOptions(
+		t.Context(),
+		dbPath,
+		WithSQLiteHistoryMaxRowsPerJob(contractHistoryLimitTwo),
+	)
+	requireNoError(t, err)
+	t.Cleanup(func() {
+		requireNoError(t, storage.Close())
+	})
+
+	requireNoError(t, saveAndUpsertStatus(t.Context(), storage, contractJobRetention))
+	seedHistoryRuns(t, storage, contractJobRetention, contractCountFour, contractCountFour)
+
+	history := requireHistory(t, storage, contractJobRetention)
+	if len(history) != contractCountTwo {
+		t.Fatalf("expected %d retained entries after max-rows retention, got %d", contractCountTwo, len(history))
+	}
+
+	if history[0].Sequence != contractSequenceThree || history[1].Sequence != contractSequenceFour {
+		t.Fatalf("expected retained sequences [%d %d], got [%d %d]",
+			contractSequenceThree,
+			contractSequenceFour,
+			history[0].Sequence,
+			history[1].Sequence,
+		)
+	}
+}
+
+func TestSQLiteJobsStorageRetentionMaxAgeOption(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "scheduler-retention-max-age.db")
+
+	storage, err := NewSQLiteJobsStorageWithOptions(
+		t.Context(),
+		dbPath,
+		WithSQLiteHistoryMaxAge(1*time.Hour),
+	)
+	requireNoError(t, err)
+	t.Cleanup(func() {
+		requireNoError(t, storage.Close())
+	})
+
+	requireNoError(t, saveAndUpsertStatus(t.Context(), storage, contractJobRetention))
+
+	now := time.Now().UTC()
+	oldPayload := newContractPayload(contractJobRetention, 1)
+	oldPayload.FinishedAt = now.Add(-2 * time.Hour)
+	recentPayload := newContractPayload(contractJobRetention, contractCountTwo)
+	recentPayload.FinishedAt = now
+
+	requireNoError(t, storage.MarkExecutionStart(t.Context(), contractJobRetention))
+	requireNoError(t, storage.RecordExecutionResult(t.Context(), contractJobRetention, oldPayload, contractCountFour))
+	requireNoError(t, storage.MarkExecutionStart(t.Context(), contractJobRetention))
+	requireNoError(t, storage.RecordExecutionResult(t.Context(), contractJobRetention, recentPayload, contractCountFour))
+
+	history := requireHistory(t, storage, contractJobRetention)
+	if len(history) != 1 {
+		t.Fatalf("expected 1 retained entry after max-age retention, got %d", len(history))
+	}
+
+	if history[0].Sequence != contractCountTwo {
+		t.Fatalf("expected retained sequence %d, got %d", contractCountTwo, history[0].Sequence)
+	}
+}
+
+func TestSQLiteJobsStoragePruneHistoryWithRetention(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "scheduler-retention-prune.db")
+
+	storage, err := NewSQLiteJobsStorage(t.Context(), dbPath)
+	requireNoError(t, err)
+	t.Cleanup(func() {
+		requireNoError(t, storage.Close())
+	})
+
+	requireNoError(t, saveAndUpsertStatus(t.Context(), storage, contractJobOldA))
+	requireNoError(t, saveAndUpsertStatus(t.Context(), storage, contractJobOldB))
+	requireNoError(t, saveAndUpsertStatus(t.Context(), storage, contractJobRowsOnly))
+
+	now := time.Now().UTC()
+	oldAndRecent := []time.Time{
+		now.Add(-3 * time.Hour),
+		now.Add(-2 * time.Hour),
+		now.Add(-1 * time.Hour),
+		now,
+	}
+	recentOnly := []time.Time{
+		now.Add(-45 * time.Minute),
+		now.Add(-30 * time.Minute),
+		now.Add(-15 * time.Minute),
+		now,
+	}
+
+	seedHistoryRunsWithFinishedAt(t, storage, contractJobOldA, oldAndRecent, contractCountFour)
+	seedHistoryRunsWithFinishedAt(t, storage, contractJobOldB, oldAndRecent, contractCountFour)
+	seedHistoryRunsWithFinishedAt(t, storage, contractJobRowsOnly, recentOnly, contractCountFour)
+
+	pruned, err := storage.PruneHistoryWithRetention(t.Context(), SQLiteHistoryRetentionOptions{
+		MaxAge:        90 * time.Minute,
+		MaxRowsPerJob: contractHistoryLimitTwo,
+	})
+	requireNoError(t, err)
+
+	if pruned != contractRowsPrunedSix {
+		t.Fatalf("expected %d pruned rows, got %d", contractRowsPrunedSix, pruned)
+	}
+
+	assertHistorySequences(t, storage, contractJobOldA, []int{contractSequenceThree, contractSequenceFour})
+	assertHistorySequences(t, storage, contractJobOldB, []int{contractSequenceThree, contractSequenceFour})
+	assertHistorySequences(t, storage, contractJobRowsOnly, []int{contractSequenceThree, contractSequenceFour})
 }
 
 func runJobsStorageContractTests(t *testing.T, factory jobsStorageFactory) {
@@ -141,43 +266,43 @@ func testJobsStorageCRUD(t *testing.T, factory jobsStorageFactory) {
 
 	store := factory()
 
-	requireNoError(t, store.Save(Job{ID: contractJobB}))
-	requireNoError(t, store.Save(Job{ID: contractJobA}))
-	requireNoError(t, store.Save(Job{ID: contractJobC}))
+	requireNoError(t, store.Save(t.Context(), Job{ID: contractJobB}))
+	requireNoError(t, store.Save(t.Context(), Job{ID: contractJobA}))
+	requireNoError(t, store.Save(t.Context(), Job{ID: contractJobC}))
 
-	err := store.Save(Job{ID: contractJobA})
+	err := store.Save(t.Context(), Job{ID: contractJobA})
 	if err == nil || !errors.Is(err, errJobAlreadyExists) {
 		t.Fatalf("expected duplicate save to wrap errJobAlreadyExists, got %v", err)
 	}
 
-	if got := store.Count(); got != contractCountThree {
+	if got := store.Count(t.Context()); got != contractCountThree {
 		t.Fatalf("expected count %d, got %d", contractCountThree, got)
 	}
 
-	if !store.Exists(contractJobA) {
+	if !store.Exists(t.Context(), contractJobA) {
 		t.Fatalf("expected %q to exist", contractJobA)
 	}
 
-	if store.Exists(contractJobMissing) {
+	if store.Exists(t.Context(), contractJobMissing) {
 		t.Fatalf("expected %q to not exist", contractJobMissing)
 	}
 
-	gotIDs := store.IDs()
+	gotIDs := store.IDs(t.Context())
 
 	wantIDs := []string{contractJobA, contractJobB, contractJobC}
 	if !slices.Equal(gotIDs, wantIDs) {
 		t.Fatalf("expected sorted ids %v, got %v", wantIDs, gotIDs)
 	}
 
-	if !store.Delete(contractJobB) {
+	if !store.Delete(t.Context(), contractJobB) {
 		t.Fatalf("expected first delete(%s) to return true", contractJobB)
 	}
 
-	if store.Delete(contractJobB) {
+	if store.Delete(t.Context(), contractJobB) {
 		t.Fatalf("expected second delete(%s) to return false", contractJobB)
 	}
 
-	if got := store.Count(); got != contractCountTwo {
+	if got := store.Count(t.Context()); got != contractCountTwo {
 		t.Fatalf("expected count %d after delete, got %d", contractCountTwo, got)
 	}
 }
@@ -207,7 +332,7 @@ func testJobsStorageStatusExecutionTransitions(t *testing.T, factory jobsStorage
 
 	store := newLifecycleStore(t, factory)
 
-	requireNoError(t, store.MarkExecutionStart(contractJobLifecycle))
+	requireNoError(t, store.MarkExecutionStart(t.Context(), contractJobLifecycle))
 
 	status := requireStatus(t, store, contractJobLifecycle)
 	if status.State != JobStateRunning || status.ActiveRuns != 1 {
@@ -215,6 +340,7 @@ func testJobsStorageStatusExecutionTransitions(t *testing.T, factory jobsStorage
 	}
 
 	requireNoError(t, store.RecordExecutionResult(
+		t.Context(),
 		contractJobLifecycle,
 		newContractPayload(contractJobLifecycle, 1),
 		contractHistoryLimitTwo,
@@ -225,8 +351,9 @@ func testJobsStorageStatusExecutionTransitions(t *testing.T, factory jobsStorage
 		t.Fatalf("expected scheduled runs=1 active=0 last-run set, got %+v", status)
 	}
 
-	requireNoError(t, store.MarkExecutionStart(contractJobLifecycle))
+	requireNoError(t, store.MarkExecutionStart(t.Context(), contractJobLifecycle))
 	requireNoError(t, store.RecordExecutionResult(
+		t.Context(),
 		contractJobLifecycle,
 		newContractPayload(contractJobLifecycle, contractCountTwo),
 		contractHistoryLimitTwo,
@@ -237,7 +364,7 @@ func testJobsStorageStatusExecutionTransitions(t *testing.T, factory jobsStorage
 		t.Fatalf("expected history with sequences [1 2], got %+v", history)
 	}
 
-	state, ok := store.State(contractJobLifecycle)
+	state, ok := store.State(t.Context(), contractJobLifecycle)
 	if !ok || state != JobStateScheduled {
 		t.Fatalf("expected state scheduled, got ok=%t state=%q", ok, state)
 	}
@@ -271,11 +398,11 @@ func testJobsStorageHistoryRetentionAndSorting(t *testing.T, factory jobsStorage
 
 	store := factory()
 
-	requireNoError(t, saveAndUpsertStatus(store, contractJobTwo))
-	requireNoError(t, saveAndUpsertStatus(store, contractJobTen))
-	requireNoError(t, saveAndUpsertStatus(store, contractJobOne))
+	requireNoError(t, saveAndUpsertStatus(t.Context(), store, contractJobTwo))
+	requireNoError(t, saveAndUpsertStatus(t.Context(), store, contractJobTen))
+	requireNoError(t, saveAndUpsertStatus(t.Context(), store, contractJobOne))
 
-	statuses := store.Statuses()
+	statuses := store.Statuses(t.Context())
 
 	gotOrder := make([]string, 0, len(statuses))
 	for _, status := range statuses {
@@ -308,7 +435,7 @@ func testJobsStorageHistoryRetentionAndSorting(t *testing.T, factory jobsStorage
 		t.Fatalf("expected runs=%d, got %d", contractCountFour, status.Runs)
 	}
 
-	if _, ok := store.History(contractJobMissing); ok {
+	if _, ok := store.History(t.Context(), contractJobMissing); ok {
 		t.Fatalf("expected missing history lookup for %q to return ok=false", contractJobMissing)
 	}
 }
@@ -318,19 +445,20 @@ func testJobsStorageTerminalBehavior(t *testing.T, factory jobsStorageFactory) {
 
 	store := factory()
 
-	requireNoError(t, saveAndUpsertStatus(store, contractJobRemoved))
-	requireNoError(t, store.MarkRemoved(contractJobRemoved))
-	requireNoError(t, store.MarkTerminal(contractJobRemoved, JobStateStopped))
+	requireNoError(t, saveAndUpsertStatus(t.Context(), store, contractJobRemoved))
+	requireNoError(t, store.MarkRemoved(t.Context(), contractJobRemoved))
+	requireNoError(t, store.MarkTerminal(t.Context(), contractJobRemoved, JobStateStopped))
 
 	removedStatus := requireStatus(t, store, contractJobRemoved)
 	if removedStatus.State != JobStateRemoved {
 		t.Fatalf("expected removed status to remain removed, got %q", removedStatus.State)
 	}
 
-	requireNoError(t, saveAndUpsertStatus(store, contractJobTerminal))
-	requireNoError(t, store.MarkExecutionStart(contractJobTerminal))
-	requireNoError(t, store.MarkTerminal(contractJobTerminal, JobStateCompleted))
+	requireNoError(t, saveAndUpsertStatus(t.Context(), store, contractJobTerminal))
+	requireNoError(t, store.MarkExecutionStart(t.Context(), contractJobTerminal))
+	requireNoError(t, store.MarkTerminal(t.Context(), contractJobTerminal, JobStateCompleted))
 	requireNoError(t, store.RecordExecutionResult(
+		t.Context(),
 		contractJobTerminal,
 		newContractPayload(contractJobTerminal, 1),
 		contractHistoryLimitTwo,
@@ -355,7 +483,7 @@ func testJobsStorageConcurrency(t *testing.T, factory jobsStorageFactory) {
 		jobID := fmt.Sprintf("job-concurrent-%d", i)
 
 		wg.Go(func() {
-			err := runConcurrentStorageFlow(store, jobID, contractRunsPerWorker)
+			err := runConcurrentStorageFlow(t.Context(), store, jobID, contractRunsPerWorker)
 			if err != nil {
 				errCh <- err
 			}
@@ -369,11 +497,11 @@ func testJobsStorageConcurrency(t *testing.T, factory jobsStorageFactory) {
 		t.Fatalf("concurrent storage flow failed: %v", err)
 	}
 
-	if got := store.Count(); got != contractWorkers {
+	if got := store.Count(t.Context()); got != contractWorkers {
 		t.Fatalf("expected %d jobs after concurrent flow, got %d", contractWorkers, got)
 	}
 
-	statuses := store.Statuses()
+	statuses := store.Statuses(t.Context())
 	if len(statuses) != contractWorkers {
 		t.Fatalf("expected %d statuses after concurrent flow, got %d", contractWorkers, len(statuses))
 	}
@@ -385,32 +513,32 @@ func testJobsStorageConcurrency(t *testing.T, factory jobsStorageFactory) {
 	}
 }
 
-func runConcurrentStorageFlow(store JobsStorage, id string, runs int) error {
-	err := saveAndUpsertStatus(store, id)
+func runConcurrentStorageFlow(ctx context.Context, store JobsStorage, id string, runs int) error {
+	err := saveAndUpsertStatus(ctx, store, id)
 	if err != nil {
 		return ewrap.Wrapf(err, "setup failed for %s", id)
 	}
 
 	for run := range runs {
-		err = store.MarkExecutionStart(id)
+		err = store.MarkExecutionStart(ctx, id)
 		if err != nil {
 			return ewrap.Wrapf(err, "mark start failed for %s", id)
 		}
 
 		payload := newContractPayload(id, run+1)
 
-		err = store.RecordExecutionResult(id, payload, contractHistoryLimit3)
+		err = store.RecordExecutionResult(ctx, id, payload, contractHistoryLimit3)
 		if err != nil {
 			return ewrap.Wrapf(err, "record result failed for %s", id)
 		}
 
-		_, ok := store.Status(id)
+		_, ok := store.Status(ctx, id)
 		if !ok {
 			return ewrap.Wrapf(errContractStatusMissing, "job id: %s", id)
 		}
 
-		_ = store.IDs()
-		_ = store.Statuses()
+		_ = store.IDs(ctx)
+		_ = store.Statuses(ctx)
 	}
 
 	return nil
@@ -421,18 +549,18 @@ func newLifecycleStore(t *testing.T, factory jobsStorageFactory) JobsStorage {
 
 	store := factory()
 
-	requireNoError(t, saveAndUpsertStatus(store, contractJobLifecycle))
+	requireNoError(t, saveAndUpsertStatus(t.Context(), store, contractJobLifecycle))
 
 	return store
 }
 
-func saveAndUpsertStatus(store JobsStorage, id string) error {
-	err := store.Save(Job{ID: id})
+func saveAndUpsertStatus(ctx context.Context, store JobsStorage, id string) error {
+	err := store.Save(ctx, Job{ID: id})
 	if err != nil {
 		return err
 	}
 
-	err = store.UpsertStatus(id, JobStateScheduled)
+	err = store.UpsertStatus(ctx, id, JobStateScheduled)
 	if err != nil {
 		return err
 	}
@@ -445,7 +573,7 @@ func newSQLiteContractStorage(t *testing.T) JobsStorage {
 
 	dbPath := filepath.Join(t.TempDir(), "storage-contract.db")
 
-	storage, err := NewSQLiteJobsStorage(dbPath)
+	storage, err := NewSQLiteJobsStorage(t.Context(), dbPath)
 	requireNoError(t, err)
 
 	t.Cleanup(func() {
@@ -459,8 +587,28 @@ func seedHistoryRuns(t *testing.T, store JobsStorage, id string, runs, historyLi
 	t.Helper()
 
 	for run := range runs {
-		requireNoError(t, store.MarkExecutionStart(id))
-		requireNoError(t, store.RecordExecutionResult(id, newContractPayload(id, run+1), historyLimit))
+		requireNoError(t, store.MarkExecutionStart(t.Context(), id))
+		requireNoError(t, store.RecordExecutionResult(t.Context(), id, newContractPayload(id, run+1), historyLimit))
+	}
+}
+
+func seedHistoryRunsWithFinishedAt(
+	t *testing.T,
+	store JobsStorage,
+	id string,
+	finishedAt []time.Time,
+	historyLimit int,
+) {
+	t.Helper()
+
+	for idx, ts := range finishedAt {
+		payload := newContractPayload(id, idx+1)
+		payload.FinishedAt = ts
+		payload.StartedAt = ts.Add(-1 * time.Millisecond)
+		payload.ScheduledAt = ts.Add(-2 * time.Millisecond)
+
+		requireNoError(t, store.MarkExecutionStart(t.Context(), id))
+		requireNoError(t, store.RecordExecutionResult(t.Context(), id, payload, historyLimit))
 	}
 }
 
@@ -475,7 +623,7 @@ func requireNoError(t *testing.T, err error) {
 func requireStatus(t *testing.T, store JobsStorage, id string) JobStatus {
 	t.Helper()
 
-	status, ok := store.Status(id)
+	status, ok := store.Status(t.Context(), id)
 	if !ok {
 		t.Fatalf("expected status for %q", id)
 	}
@@ -486,12 +634,30 @@ func requireStatus(t *testing.T, store JobsStorage, id string) JobStatus {
 func requireHistory(t *testing.T, store JobsStorage, id string) []JobRun {
 	t.Helper()
 
-	history, ok := store.History(id)
+	history, ok := store.History(t.Context(), id)
 	if !ok {
 		t.Fatalf("expected history for %q", id)
 	}
 
 	return history
+}
+
+func assertHistorySequences(t *testing.T, store JobsStorage, id string, want []int) {
+	t.Helper()
+
+	history := requireHistory(t, store, id)
+	if len(history) != len(want) {
+		t.Fatalf("expected %d history entries for %q, got %d", len(want), id, len(history))
+	}
+
+	got := make([]int, 0, len(history))
+	for _, run := range history {
+		got = append(got, run.Sequence)
+	}
+
+	if !slices.Equal(got, want) {
+		t.Fatalf("expected history sequences %v for %q, got %v", want, id, got)
+	}
 }
 
 func newContractPayload(jobID string, run int) CallbackPayload {
