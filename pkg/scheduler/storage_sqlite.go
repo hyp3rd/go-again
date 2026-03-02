@@ -43,18 +43,33 @@ CREATE TABLE IF NOT EXISTS scheduler_job_history (
 	id TEXT NOT NULL,
 	sequence INTEGER NOT NULL,
 	payload_json BLOB NOT NULL,
+	finished_at_unix_nano INTEGER NOT NULL,
 	PRIMARY KEY (id, sequence)
 );`
 	sqlCreateHistoryIndex = `
 CREATE INDEX IF NOT EXISTS idx_scheduler_job_history_id_seq
 ON scheduler_job_history (id, sequence);`
+	sqlAlterHistoryAddFinishedAt = `
+ALTER TABLE scheduler_job_history ADD COLUMN finished_at_unix_nano INTEGER NOT NULL DEFAULT 0;`
 )
 
 // SQLiteJobsStorage stores scheduler state in SQLite.
 type SQLiteJobsStorage struct {
-	db      *sql.DB
-	writeMu sync.Mutex
+	db               *sql.DB
+	writeMu          sync.Mutex
+	historyRetention SQLiteHistoryRetentionOptions
 }
+
+// SQLiteHistoryRetentionOptions configures SQLite history retention behavior.
+type SQLiteHistoryRetentionOptions struct {
+	// MaxAge keeps runs newer than now-MaxAge when > 0.
+	MaxAge time.Duration
+	// MaxRowsPerJob keeps only the latest N runs per job when > 0.
+	MaxRowsPerJob int
+}
+
+// SQLiteJobsStorageOption configures SQLiteJobsStorage behavior.
+type SQLiteJobsStorageOption func(*SQLiteJobsStorage)
 
 type sqliteJobData struct {
 	ID string `json:"id"`
@@ -80,7 +95,13 @@ type sqliteStatusRecord struct {
 
 // NewSQLiteJobsStorage creates a SQLite-backed jobs storage.
 // The path can be a filesystem path or SQLite DSN.
-func NewSQLiteJobsStorage(path string) (*SQLiteJobsStorage, error) {
+func NewSQLiteJobsStorage(ctx context.Context, path string) (*SQLiteJobsStorage, error) {
+	return NewSQLiteJobsStorageWithOptions(ctx, path)
+}
+
+// NewSQLiteJobsStorageWithOptions creates a SQLite-backed jobs storage with retention options.
+// The path can be a filesystem path or SQLite DSN.
+func NewSQLiteJobsStorageWithOptions(ctx context.Context, path string, opts ...SQLiteJobsStorageOption) (*SQLiteJobsStorage, error) {
 	dsn := normalizeSQLitePath(path)
 
 	db, err := sql.Open(sqliteDriverName, dsn)
@@ -94,7 +115,13 @@ func NewSQLiteJobsStorage(path string) (*SQLiteJobsStorage, error) {
 		db: db,
 	}
 
-	err = storage.bootstrap()
+	for _, opt := range opts {
+		if opt != nil {
+			opt(storage)
+		}
+	}
+
+	err = storage.bootstrap(ctx)
 	if err != nil {
 		closeErr := db.Close()
 		if closeErr != nil {
@@ -105,6 +132,37 @@ func NewSQLiteJobsStorage(path string) (*SQLiteJobsStorage, error) {
 	}
 
 	return storage, nil
+}
+
+// WithSQLiteHistoryRetention configures SQLite history retention.
+func WithSQLiteHistoryRetention(retention SQLiteHistoryRetentionOptions) SQLiteJobsStorageOption {
+	return func(s *SQLiteJobsStorage) {
+		if retention.MaxAge > 0 {
+			s.historyRetention.MaxAge = retention.MaxAge
+		}
+
+		if retention.MaxRowsPerJob > 0 {
+			s.historyRetention.MaxRowsPerJob = retention.MaxRowsPerJob
+		}
+	}
+}
+
+// WithSQLiteHistoryMaxAge configures age-based SQLite history retention.
+func WithSQLiteHistoryMaxAge(maxAge time.Duration) SQLiteJobsStorageOption {
+	return func(s *SQLiteJobsStorage) {
+		if maxAge > 0 {
+			s.historyRetention.MaxAge = maxAge
+		}
+	}
+}
+
+// WithSQLiteHistoryMaxRowsPerJob configures row-count SQLite history retention.
+func WithSQLiteHistoryMaxRowsPerJob(maxRowsPerJob int) SQLiteJobsStorageOption {
+	return func(s *SQLiteJobsStorage) {
+		if maxRowsPerJob > 0 {
+			s.historyRetention.MaxRowsPerJob = maxRowsPerJob
+		}
+	}
 }
 
 // Close closes the underlying SQLite DB handle.
@@ -118,7 +176,7 @@ func (s *SQLiteJobsStorage) Close() error {
 }
 
 // Save stores a job by ID.
-func (s *SQLiteJobsStorage) Save(job Job) error {
+func (s *SQLiteJobsStorage) Save(ctx context.Context, job Job) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
@@ -126,8 +184,6 @@ func (s *SQLiteJobsStorage) Save(job Job) error {
 	if err != nil {
 		return ewrap.Wrapf(ErrStorageOperation, "marshal job data failed: %v", err)
 	}
-
-	ctx := context.Background()
 
 	_, err = s.db.ExecContext(
 		ctx,
@@ -147,11 +203,9 @@ func (s *SQLiteJobsStorage) Save(job Job) error {
 }
 
 // Delete removes a job by ID.
-func (s *SQLiteJobsStorage) Delete(id string) bool {
+func (s *SQLiteJobsStorage) Delete(ctx context.Context, id string) bool {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-
-	ctx := context.Background()
 
 	res, err := s.db.ExecContext(ctx, `DELETE FROM scheduler_jobs WHERE id = ?`, id)
 	if err != nil {
@@ -167,11 +221,8 @@ func (s *SQLiteJobsStorage) Delete(id string) bool {
 }
 
 // Exists reports whether a job exists by ID.
-func (s *SQLiteJobsStorage) Exists(id string) bool {
-	var (
-		found int
-		ctx   = context.Background()
-	)
+func (s *SQLiteJobsStorage) Exists(ctx context.Context, id string) bool {
+	var found int
 
 	err := s.db.QueryRowContext(
 		ctx,
@@ -186,11 +237,8 @@ func (s *SQLiteJobsStorage) Exists(id string) bool {
 }
 
 // Count returns the number of stored jobs.
-func (s *SQLiteJobsStorage) Count() int {
-	var (
-		count int
-		ctx   = context.Background()
-	)
+func (s *SQLiteJobsStorage) Count(ctx context.Context) int {
+	var count int
 
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM scheduler_jobs`).Scan(&count)
 	if err != nil {
@@ -201,9 +249,7 @@ func (s *SQLiteJobsStorage) Count() int {
 }
 
 // IDs returns sorted stored job IDs.
-func (s *SQLiteJobsStorage) IDs() []string {
-	ctx := context.Background()
-
+func (s *SQLiteJobsStorage) IDs(ctx context.Context) []string {
 	rows, err := s.db.QueryContext(ctx, `SELECT id FROM scheduler_jobs ORDER BY id ASC`)
 	if err != nil {
 		return nil
@@ -238,11 +284,11 @@ func (s *SQLiteJobsStorage) IDs() []string {
 }
 
 // UpsertStatus creates or updates a job status entry with the provided state.
-func (s *SQLiteJobsStorage) UpsertStatus(id string, state JobState) error {
+func (s *SQLiteJobsStorage) UpsertStatus(ctx context.Context, id string, state JobState) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
-	return s.withWriteTx("upsert status", func(ctx context.Context, tx *sql.Tx) error {
+	return s.withWriteTx(ctx, "upsert status", func(ctx context.Context, tx *sql.Tx) error {
 		record, err := loadStatusRecordTx(ctx, tx, id)
 		if err != nil {
 			return err
@@ -267,11 +313,11 @@ func (s *SQLiteJobsStorage) UpsertStatus(id string, state JobState) error {
 }
 
 // MarkRemoved sets a status entry to removed and terminal.
-func (s *SQLiteJobsStorage) MarkRemoved(id string) error {
+func (s *SQLiteJobsStorage) MarkRemoved(ctx context.Context, id string) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
-	return s.withWriteTx("mark removed", func(ctx context.Context, tx *sql.Tx) error {
+	return s.withWriteTx(ctx, "mark removed", func(ctx context.Context, tx *sql.Tx) error {
 		record, err := loadStatusRecordTx(ctx, tx, id)
 		if err != nil {
 			return err
@@ -291,11 +337,11 @@ func (s *SQLiteJobsStorage) MarkRemoved(id string) error {
 }
 
 // MarkTerminal marks a status entry as terminal with the provided state.
-func (s *SQLiteJobsStorage) MarkTerminal(id string, state JobState) error {
+func (s *SQLiteJobsStorage) MarkTerminal(ctx context.Context, id string, state JobState) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
-	return s.withWriteTx("mark terminal", func(ctx context.Context, tx *sql.Tx) error {
+	return s.withWriteTx(ctx, "mark terminal", func(ctx context.Context, tx *sql.Tx) error {
 		record, err := loadStatusRecordTx(ctx, tx, id)
 		if err != nil {
 			return err
@@ -315,11 +361,11 @@ func (s *SQLiteJobsStorage) MarkTerminal(id string, state JobState) error {
 }
 
 // MarkExecutionStart marks one execution as active for a job.
-func (s *SQLiteJobsStorage) MarkExecutionStart(id string) error {
+func (s *SQLiteJobsStorage) MarkExecutionStart(ctx context.Context, id string) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
-	return s.withWriteTx("mark execution start", func(ctx context.Context, tx *sql.Tx) error {
+	return s.withWriteTx(ctx, "mark execution start", func(ctx context.Context, tx *sql.Tx) error {
 		record, err := loadStatusRecordTx(ctx, tx, id)
 		if err != nil {
 			return err
@@ -342,11 +388,11 @@ func (s *SQLiteJobsStorage) MarkExecutionStart(id string) error {
 }
 
 // RecordExecutionResult appends run history and updates status counters.
-func (s *SQLiteJobsStorage) RecordExecutionResult(id string, payload CallbackPayload, historyLimit int) error {
+func (s *SQLiteJobsStorage) RecordExecutionResult(ctx context.Context, id string, payload CallbackPayload, historyLimit int) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
-	return s.withWriteTx("record execution result", func(ctx context.Context, tx *sql.Tx) error {
+	return s.withWriteTx(ctx, "record execution result", func(ctx context.Context, tx *sql.Tx) error {
 		record, err := loadStatusRecordTx(ctx, tx, id)
 		if err != nil {
 			return err
@@ -360,6 +406,7 @@ func (s *SQLiteJobsStorage) RecordExecutionResult(id string, payload CallbackPay
 			historyLimit = defaultHistoryLimit
 		}
 
+		effectiveHistoryLimit := mergeHistoryLimit(historyLimit, s.historyRetention.MaxRowsPerJob)
 		record.lastSequence++
 
 		err = insertHistoryTx(ctx, tx, id, record.lastSequence, payload)
@@ -367,9 +414,18 @@ func (s *SQLiteJobsStorage) RecordExecutionResult(id string, payload CallbackPay
 			return err
 		}
 
-		err = trimHistoryTx(ctx, tx, id, record.lastSequence, historyLimit)
+		err = trimHistoryTx(ctx, tx, id, record.lastSequence, effectiveHistoryLimit)
 		if err != nil {
 			return err
+		}
+
+		if s.historyRetention.MaxAge > 0 {
+			cutoff := time.Now().Add(-s.historyRetention.MaxAge).UnixNano()
+
+			_, err = pruneHistoryOlderThanForJobTx(ctx, tx, id, cutoff)
+			if err != nil {
+				return err
+			}
 		}
 
 		record = applyExecutionResult(record, payload)
@@ -379,8 +435,8 @@ func (s *SQLiteJobsStorage) RecordExecutionResult(id string, payload CallbackPay
 }
 
 // State returns the latest lifecycle state for a job status entry.
-func (s *SQLiteJobsStorage) State(id string) (JobState, bool) {
-	record, ok := s.loadStatusRecord(id)
+func (s *SQLiteJobsStorage) State(ctx context.Context, id string) (JobState, bool) {
+	record, ok := s.loadStatusRecord(ctx, id)
 	if !ok {
 		return "", false
 	}
@@ -389,8 +445,8 @@ func (s *SQLiteJobsStorage) State(id string) (JobState, bool) {
 }
 
 // Status returns the latest status snapshot for a job.
-func (s *SQLiteJobsStorage) Status(id string) (JobStatus, bool) {
-	record, ok := s.loadStatusRecord(id)
+func (s *SQLiteJobsStorage) Status(ctx context.Context, id string) (JobStatus, bool) {
+	record, ok := s.loadStatusRecord(ctx, id)
 	if !ok {
 		return JobStatus{}, false
 	}
@@ -401,9 +457,7 @@ func (s *SQLiteJobsStorage) Status(id string) (JobStatus, bool) {
 }
 
 // Statuses returns all status snapshots sorted by job ID.
-func (s *SQLiteJobsStorage) Statuses() []JobStatus {
-	ctx := context.Background()
-
+func (s *SQLiteJobsStorage) Statuses(ctx context.Context) []JobStatus {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT id, status_json, active_runs
 FROM scheduler_job_status
@@ -452,9 +506,7 @@ ORDER BY id ASC
 }
 
 // History returns retained execution history for a job.
-func (s *SQLiteJobsStorage) History(id string) ([]JobRun, bool) {
-	ctx := context.Background()
-
+func (s *SQLiteJobsStorage) History(ctx context.Context, id string) ([]JobRun, bool) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT sequence, payload_json
 FROM scheduler_job_history
@@ -503,18 +555,63 @@ ORDER BY sequence ASC
 	}
 
 	if len(history) == 0 {
-		return nil, s.statusExists(id)
+		return nil, s.statusExists(ctx, id)
 	}
 
 	return history, true
 }
 
+// PruneHistory applies configured retention rules and returns number of deleted history rows.
+func (s *SQLiteJobsStorage) PruneHistory(ctx context.Context) (int, error) {
+	return s.PruneHistoryWithRetention(ctx, s.historyRetention)
+}
+
+// PruneHistoryWithRetention applies one-off retention rules and returns number of deleted history rows.
+func (s *SQLiteJobsStorage) PruneHistoryWithRetention(ctx context.Context, retention SQLiteHistoryRetentionOptions) (int, error) {
+	if retention.MaxAge <= 0 && retention.MaxRowsPerJob <= 0 {
+		return 0, nil
+	}
+
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	var deleted int64
+
+	err := s.withWriteTx(ctx, "prune history", func(ctx context.Context, tx *sql.Tx) error {
+		if retention.MaxAge > 0 {
+			cutoff := time.Now().Add(-retention.MaxAge).UnixNano()
+
+			deletedByAge, pruneErr := pruneHistoryOlderThanTx(ctx, tx, cutoff)
+			if pruneErr != nil {
+				return pruneErr
+			}
+
+			deleted += deletedByAge
+		}
+
+		if retention.MaxRowsPerJob > 0 {
+			deletedByRows, pruneErr := pruneHistoryMaxRowsPerJobTx(ctx, tx, retention.MaxRowsPerJob)
+			if pruneErr != nil {
+				return pruneErr
+			}
+
+			deleted += deletedByRows
+		}
+
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	return int(deleted), nil
+}
+
 func (s *SQLiteJobsStorage) withWriteTx(
+	ctx context.Context,
 	operation string,
 	fn func(context.Context, *sql.Tx) error,
 ) error {
-	ctx := context.Background()
-
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ewrap.Wrapf(ErrStorageOperation, "begin %s tx failed: %v", operation, err)
@@ -534,8 +631,7 @@ func (s *SQLiteJobsStorage) withWriteTx(
 	return nil
 }
 
-func (s *SQLiteJobsStorage) bootstrap() error {
-	ctx := context.Background()
+func (s *SQLiteJobsStorage) bootstrap(ctx context.Context) error {
 	statements := []string{
 		sqlitePragmaWAL,
 		sqlitePragmaBusy,
@@ -544,11 +640,16 @@ func (s *SQLiteJobsStorage) bootstrap() error {
 		sqlCreateStatusTable,
 		sqlCreateHistoryTable,
 		sqlCreateHistoryIndex,
+		sqlAlterHistoryAddFinishedAt,
 	}
 
 	for _, statement := range statements {
 		_, err := s.db.ExecContext(ctx, statement)
 		if err != nil {
+			if statement == sqlAlterHistoryAddFinishedAt && isSQLiteDuplicateColumnError(err) {
+				continue
+			}
+
 			return ewrap.Wrapf(ErrStorageOperation, "sqlite init statement failed: %v", err)
 		}
 	}
@@ -569,9 +670,7 @@ func normalizeSQLitePath(path string) string {
 	return fmt.Sprintf("%s:%s", sqliteDefaultDataDSN, trimmed)
 }
 
-func (s *SQLiteJobsStorage) loadStatusRecord(id string) (sqliteStatusRecord, bool) {
-	ctx := context.Background()
-
+func (s *SQLiteJobsStorage) loadStatusRecord(ctx context.Context, id string) (sqliteStatusRecord, bool) {
 	record, err := loadStatusRecordQueryRow(s.db.QueryRowContext(
 		ctx,
 		`SELECT status_json, active_runs, terminal, last_sequence
@@ -586,11 +685,8 @@ WHERE id = ?`,
 	return record, true
 }
 
-func (s *SQLiteJobsStorage) statusExists(id string) bool {
-	var (
-		found int
-		ctx   = context.Background()
-	)
+func (s *SQLiteJobsStorage) statusExists(ctx context.Context, id string) bool {
+	var found int
 
 	err := s.db.QueryRowContext(
 		ctx,
@@ -759,12 +855,15 @@ func insertHistoryTx(ctx context.Context, tx *sql.Tx, id string, sequence int, p
 		return ewrap.Wrapf(ErrStorageOperation, "marshal execution payload failed: %v", err)
 	}
 
+	finishedAtUnixNano := payloadFinishedAtUnixNano(payload)
+
 	_, err = tx.ExecContext(
 		ctx,
-		`INSERT INTO scheduler_job_history (id, sequence, payload_json) VALUES (?, ?, ?)`,
+		`INSERT INTO scheduler_job_history (id, sequence, payload_json, finished_at_unix_nano) VALUES (?, ?, ?, ?)`,
 		id,
 		sequence,
 		payloadData,
+		finishedAtUnixNano,
 	)
 	if err != nil {
 		return ewrap.Wrapf(ErrStorageOperation, "insert execution history failed: %v", err)
@@ -792,6 +891,83 @@ func trimHistoryTx(ctx context.Context, tx *sql.Tx, id string, sequence, history
 	return nil
 }
 
+func pruneHistoryOlderThanForJobTx(ctx context.Context, tx *sql.Tx, id string, cutoffUnixNano int64) (int64, error) {
+	res, err := tx.ExecContext(
+		ctx,
+		`DELETE FROM scheduler_job_history WHERE id = ? AND finished_at_unix_nano > 0 AND finished_at_unix_nano < ?`,
+		id,
+		cutoffUnixNano,
+	)
+	if err != nil {
+		return 0, ewrap.Wrapf(ErrStorageOperation, "prune execution history by age for job failed: %v", err)
+	}
+
+	return rowsAffected(res)
+}
+
+func pruneHistoryOlderThanTx(ctx context.Context, tx *sql.Tx, cutoffUnixNano int64) (int64, error) {
+	res, err := tx.ExecContext(
+		ctx,
+		`DELETE FROM scheduler_job_history WHERE finished_at_unix_nano > 0 AND finished_at_unix_nano < ?`,
+		cutoffUnixNano,
+	)
+	if err != nil {
+		return 0, ewrap.Wrapf(ErrStorageOperation, "prune execution history by age failed: %v", err)
+	}
+
+	return rowsAffected(res)
+}
+
+func pruneHistoryMaxRowsPerJobTx(ctx context.Context, tx *sql.Tx, maxRowsPerJob int) (int64, error) {
+	res, err := tx.ExecContext(
+		ctx,
+		`DELETE FROM scheduler_job_history
+WHERE rowid IN (
+	SELECT rowid FROM (
+		SELECT rowid,
+			ROW_NUMBER() OVER (PARTITION BY id ORDER BY sequence DESC) AS rn
+		FROM scheduler_job_history
+	) ranked
+	WHERE rn > ?
+)`,
+		maxRowsPerJob,
+	)
+	if err != nil {
+		return 0, ewrap.Wrapf(ErrStorageOperation, "prune execution history by max rows failed: %v", err)
+	}
+
+	return rowsAffected(res)
+}
+
+func mergeHistoryLimit(historyLimit, maxRowsPerJob int) int {
+	if maxRowsPerJob <= 0 {
+		return historyLimit
+	}
+
+	if historyLimit <= 0 {
+		return maxRowsPerJob
+	}
+
+	return min(historyLimit, maxRowsPerJob)
+}
+
+func payloadFinishedAtUnixNano(payload CallbackPayload) int64 {
+	if payload.FinishedAt.IsZero() {
+		return 0
+	}
+
+	return payload.FinishedAt.UnixNano()
+}
+
+func rowsAffected(res sql.Result) (int64, error) {
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, ewrap.Wrapf(ErrStorageOperation, "rows affected failed: %v", err)
+	}
+
+	return affected, nil
+}
+
 func rollbackTx(tx *sql.Tx) {
 	err := tx.Rollback()
 	if err != nil && !errors.Is(err, sql.ErrTxDone) {
@@ -807,4 +983,14 @@ func isSQLiteUniqueViolation(err error) bool {
 	msg := strings.ToLower(err.Error())
 
 	return strings.Contains(msg, "constraint failed") && strings.Contains(msg, "unique")
+}
+
+func isSQLiteDuplicateColumnError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	msg := strings.ToLower(err.Error())
+
+	return strings.Contains(msg, "duplicate column name")
 }

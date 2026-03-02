@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"slices"
 	"strings"
 	"sync"
@@ -16,21 +17,21 @@ var errJobAlreadyExists = ewrap.New("job already exists")
 //
 //nolint:interfacebloat // centralized scheduler state contract intentionally groups active-job and status/history operations.
 type JobsStorage interface {
-	Save(job Job) error
-	Delete(id string) bool
-	Exists(id string) bool
-	Count() int
-	IDs() []string
+	Save(ctx context.Context, job Job) error
+	Delete(ctx context.Context, id string) bool
+	Exists(ctx context.Context, id string) bool
+	Count(ctx context.Context) int
+	IDs(ctx context.Context) []string
 
-	UpsertStatus(id string, state JobState) error
-	MarkRemoved(id string) error
-	MarkTerminal(id string, state JobState) error
-	MarkExecutionStart(id string) error
-	RecordExecutionResult(id string, payload CallbackPayload, historyLimit int) error
-	State(id string) (JobState, bool)
-	Status(id string) (JobStatus, bool)
-	Statuses() []JobStatus
-	History(id string) ([]JobRun, bool)
+	UpsertStatus(ctx context.Context, id string, state JobState) error
+	MarkRemoved(ctx context.Context, id string) error
+	MarkTerminal(ctx context.Context, id string, state JobState) error
+	MarkExecutionStart(ctx context.Context, id string) error
+	RecordExecutionResult(ctx context.Context, id string, payload CallbackPayload, historyLimit int) error
+	State(ctx context.Context, id string) (JobState, bool)
+	Status(ctx context.Context, id string) (JobStatus, bool)
+	Statuses(ctx context.Context) []JobStatus
+	History(ctx context.Context, id string) ([]JobRun, bool)
 }
 
 type jobStatusEntry struct {
@@ -57,7 +58,7 @@ func NewInMemoryJobsStorage() *InMemoryJobsStorage {
 }
 
 // Save stores a job by ID.
-func (s *InMemoryJobsStorage) Save(job Job) error {
+func (s *InMemoryJobsStorage) Save(_ context.Context, job Job) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -71,7 +72,7 @@ func (s *InMemoryJobsStorage) Save(job Job) error {
 }
 
 // Delete removes a job by ID.
-func (s *InMemoryJobsStorage) Delete(id string) bool {
+func (s *InMemoryJobsStorage) Delete(_ context.Context, id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -85,7 +86,7 @@ func (s *InMemoryJobsStorage) Delete(id string) bool {
 }
 
 // Exists reports whether a job exists by ID.
-func (s *InMemoryJobsStorage) Exists(id string) bool {
+func (s *InMemoryJobsStorage) Exists(_ context.Context, id string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -95,7 +96,7 @@ func (s *InMemoryJobsStorage) Exists(id string) bool {
 }
 
 // Count returns the number of stored jobs.
-func (s *InMemoryJobsStorage) Count() int {
+func (s *InMemoryJobsStorage) Count(_ context.Context) int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -103,7 +104,7 @@ func (s *InMemoryJobsStorage) Count() int {
 }
 
 // IDs returns sorted stored job IDs.
-func (s *InMemoryJobsStorage) IDs() []string {
+func (s *InMemoryJobsStorage) IDs(_ context.Context) []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -118,7 +119,7 @@ func (s *InMemoryJobsStorage) IDs() []string {
 }
 
 // UpsertStatus creates or updates a job status entry with the provided state.
-func (s *InMemoryJobsStorage) UpsertStatus(id string, state JobState) error {
+func (s *InMemoryJobsStorage) UpsertStatus(_ context.Context, id string, state JobState) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -142,7 +143,7 @@ func (s *InMemoryJobsStorage) UpsertStatus(id string, state JobState) error {
 }
 
 // MarkRemoved sets a status entry to removed and terminal.
-func (s *InMemoryJobsStorage) MarkRemoved(id string) error {
+func (s *InMemoryJobsStorage) MarkRemoved(_ context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -160,7 +161,7 @@ func (s *InMemoryJobsStorage) MarkRemoved(id string) error {
 }
 
 // MarkTerminal marks a status entry as terminal with the provided state.
-func (s *InMemoryJobsStorage) MarkTerminal(id string, state JobState) error {
+func (s *InMemoryJobsStorage) MarkTerminal(_ context.Context, id string, state JobState) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -178,7 +179,7 @@ func (s *InMemoryJobsStorage) MarkTerminal(id string, state JobState) error {
 }
 
 // MarkExecutionStart marks one execution as active for a job.
-func (s *InMemoryJobsStorage) MarkExecutionStart(id string) error {
+func (s *InMemoryJobsStorage) MarkExecutionStart(_ context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -199,7 +200,7 @@ func (s *InMemoryJobsStorage) MarkExecutionStart(id string) error {
 }
 
 // RecordExecutionResult appends run history and updates status counters.
-func (s *InMemoryJobsStorage) RecordExecutionResult(id string, payload CallbackPayload, historyLimit int) error {
+func (s *InMemoryJobsStorage) RecordExecutionResult(_ context.Context, id string, payload CallbackPayload, historyLimit int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -246,7 +247,7 @@ func (s *InMemoryJobsStorage) RecordExecutionResult(id string, payload CallbackP
 }
 
 // State returns the latest lifecycle state for a job status entry.
-func (s *InMemoryJobsStorage) State(id string) (JobState, bool) {
+func (s *InMemoryJobsStorage) State(_ context.Context, id string) (JobState, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -259,7 +260,7 @@ func (s *InMemoryJobsStorage) State(id string) (JobState, bool) {
 }
 
 // Status returns the latest status snapshot for a job.
-func (s *InMemoryJobsStorage) Status(id string) (JobStatus, bool) {
+func (s *InMemoryJobsStorage) Status(_ context.Context, id string) (JobStatus, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -272,7 +273,7 @@ func (s *InMemoryJobsStorage) Status(id string) (JobStatus, bool) {
 }
 
 // Statuses returns all status snapshots sorted by job ID.
-func (s *InMemoryJobsStorage) Statuses() []JobStatus {
+func (s *InMemoryJobsStorage) Statuses(_ context.Context) []JobStatus {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -289,7 +290,7 @@ func (s *InMemoryJobsStorage) Statuses() []JobStatus {
 }
 
 // History returns retained execution history for a job.
-func (s *InMemoryJobsStorage) History(id string) ([]JobRun, bool) {
+func (s *InMemoryJobsStorage) History(_ context.Context, id string) ([]JobRun, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

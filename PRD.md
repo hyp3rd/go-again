@@ -69,9 +69,10 @@ After this audit, a follow-up implementation pass completed the highest-priority
 - Added richer scheduler read queries: `QueryJobStatuses(JobStatusQuery)` (ID/state filters + pagination) and `QueryJobHistory(id, JobHistoryQuery)` (sequence filter + tail limit).
 - Added pluggable scheduler state storage via `WithJobsStorage(...)` and default `InMemoryJobsStorage` (active jobs + status/history).
 - Added constructor-time recovered-state reconciliation: persisted `scheduled`/`running` statuses are marked `canceled` and recovered active-job registrations are cleared (no auto-resume).
+- Added SQLite history retention controls and prune APIs: `NewSQLiteJobsStorageWithOptions(...)`, `WithSQLiteHistoryMaxAge(...)`, `WithSQLiteHistoryMaxRowsPerJob(...)`, `WithSQLiteHistoryRetention(...)`, `PruneHistory()`, and `PruneHistoryWithRetention(...)`.
 - Expanded logger coverage: callback request/send/response-read-close failure paths, request response-read-close failure paths, storage write failure paths (`mark removed`, `mark execution start`, `record execution result`, `mark terminal`, `mark stopped`), warn/debug `logError` behavior, and `NewScheduler()` warning-path logging for validator init/state-reconciliation failures.
 
-This closes gap `#1`, closes gap `#5`, and partially addresses gaps `#2`, `#4`, `#6`, and `#7`.
+This closes gap `#1`, closes gap `#5`, and partially addresses gaps `#2`, `#4`, `#6`, and `#7` (with further retention work and high-churn observability still open).
 
 ## Status vs Original PRD
 
@@ -190,9 +191,10 @@ This closes gap `#1`, closes gap `#5`, and partially addresses gaps `#2`, `#4`, 
       - per-job status (`JobStatus`, `JobStatuses`)
       - per-job run history (`JobHistory`) with retention control (`WithHistoryLimit`)
       - filtered status and bounded history queries (`QueryJobStatuses`, `QueryJobHistory`)
+      - SQLite retention policies and manual pruning (`WithSQLiteHistoryMaxAge`, `WithSQLiteHistoryMaxRowsPerJob`, `PruneHistory`, `PruneHistoryWithRetention`)
 - Remaining gaps:
       - richer query/filter semantics for large job sets
-      - long-term history retention strategy (for example pruning/archival policy) even when using persistent storage backends
+      - retention/archival strategy parity across non-SQLite custom storage backends
       - metrics hooks
 - Impact:
       - Usable for embedded/simple scheduling, but limited for production observability.
@@ -202,7 +204,6 @@ This closes gap `#1`, closes gap `#5`, and partially addresses gaps `#2`, `#4`, 
 ### 7. Test coverage gaps (non-blocking, but worth addressing)
 
 - No explicit tests for:
-      - additional introspection/status behavior once richer status APIs (querying/filtering/pagination) are added
       - edge-case coverage for status/history retention under very high churn
 - Recommendation:
       - Add focused tests before changing scheduler lifecycle semantics.

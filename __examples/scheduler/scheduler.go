@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -13,11 +14,15 @@ import (
 )
 
 const (
+	pollTimeout   = 5 * time.Second
 	scheduleEvery = 10 * time.Millisecond
 	waitTimeout   = 2 * time.Second
 )
 
 func main() {
+	ctx, cancel := context.WithTimeout(context.Background(), pollTimeout)
+	defer cancel()
+
 	callbackCh := make(chan scheduler.CallbackPayload, 1)
 
 	mux := http.NewServeMux()
@@ -46,24 +51,26 @@ func main() {
 	defer server.Close()
 
 	s := scheduler.NewScheduler(
+		ctx,
 		scheduler.WithHTTPClient(server.Client()),
 		scheduler.WithURLValidator(nil), // allow local endpoints for example usage
 	)
-	defer s.Stop()
+	defer s.Stop(ctx)
 
-	jobID, err := s.Schedule(scheduler.Job{
-		Schedule: scheduler.Schedule{
-			Every:   scheduleEvery,
-			MaxRuns: 1,
-		},
-		Request: scheduler.Request{
-			Method: http.MethodGet,
-			URL:    server.URL + "/target",
-		},
-		Callback: scheduler.Callback{
-			URL: server.URL + "/callback",
-		},
-	})
+	jobID, err := s.Schedule(ctx,
+		scheduler.Job{
+			Schedule: scheduler.Schedule{
+				Every:   scheduleEvery,
+				MaxRuns: 1,
+			},
+			Request: scheduler.Request{
+				Method: http.MethodGet,
+				URL:    server.URL + "/target",
+			},
+			Callback: scheduler.Callback{
+				URL: server.URL + "/callback",
+			},
+		})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "schedule failed: %v\n", err)
 
@@ -79,12 +86,12 @@ func main() {
 		return
 	}
 
-	status, ok := s.JobStatus(jobID)
+	status, ok := s.JobStatus(ctx, jobID)
 	if ok {
 		fmt.Printf("status: state=%s runs=%d active=%d\n", status.State, status.Runs, status.ActiveRuns)
 	}
 
-	history, ok := s.JobHistory(jobID)
+	history, ok := s.JobHistory(ctx, jobID)
 	if ok {
 		fmt.Printf("history entries: %d\n", len(history))
 	}

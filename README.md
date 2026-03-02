@@ -253,7 +253,11 @@ Source:
 
 ```go
 dbPath := filepath.Join(os.TempDir(), "go-again-scheduler-example.db")
-storage, err := scheduler.NewSQLiteJobsStorage(dbPath)
+storage, err := scheduler.NewSQLiteJobsStorageWithOptions(
+ dbPath,
+ scheduler.WithSQLiteHistoryMaxAge(24*time.Hour),
+ scheduler.WithSQLiteHistoryMaxRowsPerJob(100),
+)
 if err != nil {
  panic(err)
 }
@@ -273,6 +277,12 @@ if err != nil {
  panic(err)
 }
 fmt.Println("scheduled job:", jobID)
+
+pruned, err := storage.PruneHistory()
+if err != nil {
+ panic(err)
+}
+fmt.Println("pruned rows:", pruned)
 ```
 
 ### Example: Fail-Closed Scheduler Construction
@@ -317,6 +327,9 @@ defer s.Stop()
 - `QueryJobHistory(id, JobHistoryQuery)` adds history filtering (`FromSequence`) and tail limiting (`Limit`) while preserving ascending sequence order.
 - Default `InMemoryJobsStorage` is process-local; use `WithJobsStorage(...)` for custom durable/backed storage.
 - `NewSQLiteJobsStorage(path)` provides a built-in durable storage implementation for `WithJobsStorage(...)`; call `Close()` when finished.
+- `NewSQLiteJobsStorageWithOptions(path, ...)` configures SQLite retention controls: `WithSQLiteHistoryMaxAge(duration)`, `WithSQLiteHistoryMaxRowsPerJob(n)`, and `WithSQLiteHistoryRetention(...)`.
+- `SQLiteJobsStorage.PruneHistory()` and `PruneHistoryWithRetention(...)` provide manual pruning for periodic cleanup jobs.
+- SQLite retention is also applied on write for new history records (age-based and max-rows-per-job), in addition to scheduler `WithHistoryLimit`.
 - On scheduler startup, recovered active-job registrations from storage are reconciled: `scheduled`/`running` states are marked `canceled`, then active-job IDs are cleared. Jobs are not auto-resumed.
 - Non-fatal storage write failures during runtime transitions are logged (warn) and execution continues.
 - Non-fatal request/callback response body read/close failures are logged (warn) and execution continues.
