@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -17,10 +18,14 @@ const (
 )
 
 func main() {
+	ctx, cancel := context.WithTimeout(context.Background(), pollTimeout)
+	defer cancel()
+
 	dbPath := filepath.Join(os.TempDir(), "go-again-scheduler-example.db")
 	_ = os.Remove(dbPath)
 
 	storage, err := scheduler.NewSQLiteJobsStorageWithOptions(
+		ctx,
 		dbPath,
 		scheduler.WithSQLiteHistoryMaxAge(24*time.Hour),
 		scheduler.WithSQLiteHistoryMaxRowsPerJob(100),
@@ -41,21 +46,24 @@ func main() {
 	defer target.Close()
 
 	s := scheduler.NewScheduler(
+		ctx,
 		scheduler.WithJobsStorage(storage),
 		scheduler.WithURLValidator(nil), // allow local endpoint for example usage
 	)
-	defer s.Stop()
+	defer s.Stop(ctx)
 
-	jobID, err := s.Schedule(scheduler.Job{
-		Schedule: scheduler.Schedule{
-			Every:   pollEvery,
-			MaxRuns: 1,
-		},
-		Request: scheduler.Request{
-			Method: http.MethodGet,
-			URL:    target.URL,
-		},
-	})
+	jobID, err := s.Schedule(
+		ctx,
+		scheduler.Job{
+			Schedule: scheduler.Schedule{
+				Every:   pollEvery,
+				MaxRuns: 1,
+			},
+			Request: scheduler.Request{
+				Method: http.MethodGet,
+				URL:    target.URL,
+			},
+		})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "schedule failed: %v\n", err)
 
@@ -64,9 +72,9 @@ func main() {
 
 	deadline := time.Now().Add(pollTimeout)
 	for time.Now().Before(deadline) {
-		status, ok := s.JobStatus(jobID)
+		status, ok := s.JobStatus(ctx, jobID)
 		if ok && status.State == scheduler.JobStateCompleted {
-			pruned, pruneErr := storage.PruneHistory()
+			pruned, pruneErr := storage.PruneHistory(ctx)
 			if pruneErr != nil {
 				fmt.Fprintf(os.Stderr, "prune history failed: %v\n", pruneErr)
 
