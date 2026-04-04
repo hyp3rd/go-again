@@ -55,7 +55,7 @@ type Scheduler struct {
 	// urlValidatorConfigured is true when callers explicitly set WithURLValidator, including nil.
 	urlValidatorConfigured bool
 	wg                     sync.WaitGroup
-	counter                uint64
+	counter                atomic.Uint64
 	stopped                bool
 }
 
@@ -371,7 +371,7 @@ func (s *Scheduler) reconcileRecoveredState(ctx context.Context) error {
 }
 
 func (s *Scheduler) nextID(_ context.Context) string {
-	id := atomic.AddUint64(&s.counter, 1)
+	id := s.counter.Add(1)
 
 	return fmt.Sprintf("job-%d", id)
 }

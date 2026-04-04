@@ -4,10 +4,10 @@ go 1.26.1
 
 require (
 	github.com/goccy/go-json v0.10.6
-	github.com/hyp3rd/ewrap v1.3.7
+	github.com/hyp3rd/ewrap v1.3.9
 	github.com/hyp3rd/sectools v1.2.3
 	github.com/stretchr/testify v1.11.1
-	modernc.org/sqlite v1.46.1
+	modernc.org/sqlite v1.48.1
 )
 
 require (
