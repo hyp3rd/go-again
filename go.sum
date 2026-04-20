@@ -12,8 +12,8 @@ github.com/hashicorp/golang-lru/v2 v2.0.7 h1:a+bsQ5rvGLjzHuww6tVxozPZFVghXaHOwFs
 github.com/hashicorp/golang-lru/v2 v2.0.7/go.mod h1:QeFd9opnmA6QUJc5vARoKUSoFhyfM2/ZepoAG6RGpeM=
 github.com/hyp3rd/ewrap v1.4.0 h1:RyxyYKDP8HLVDreWw+g89yTZfJjTNRcmrP3tiKQjZK4=
 github.com/hyp3rd/ewrap v1.4.0/go.mod h1:ob+oREpgZ9Bonq5C1tViaqBtWmh1H5EFWc9Bfn1lPB0=
-github.com/hyp3rd/sectools v1.2.4 h1:ZfboELIs57xbs8j5lP/jkwh+zhnoeWGfgpX5nCuF7WA=
-github.com/hyp3rd/sectools v1.2.4/go.mod h1:H+0Mjhn3sTV6F4iFvoeVjUT/60MXOYqOMyuV7TG8YNI=
+github.com/hyp3rd/sectools v1.2.5 h1:i3uyCA5jElfMwYPe0YQvPyDMSJIlKFMTgaqjsWd53ok=
+github.com/hyp3rd/sectools v1.2.5/go.mod h1:6olmYYaZFgHz6fLgv/XZf/kePquYUWIyfC6TeyJvWXg=
 github.com/mattn/go-isatty v0.0.21 h1:xYae+lCNBP7QuW4PUnNG61ffM4hVIfm+zUzDuSzYLGs=
 github.com/mattn/go-isatty v0.0.21/go.mod h1:ZXfXG4SQHsB/w3ZeOYbR0PrPwLy+n6xiMrJlRFqopa4=
 github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOFAw7w=
