@@ -7,7 +7,7 @@ require (
 	github.com/hyp3rd/ewrap v1.4.0
 	github.com/hyp3rd/sectools v1.2.4
 	github.com/stretchr/testify v1.11.1
-	modernc.org/sqlite v1.48.2
+	modernc.org/sqlite v1.49.1
 )
 
 require (
