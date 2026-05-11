@@ -95,7 +95,8 @@ func TestNewRetrier(t *testing.T) {
 	}
 
 	// Test invalid options.
-	_, err = again.NewRetrier(context.Background(),
+	_, err = again.NewRetrier(
+		context.Background(),
 		again.WithMaxRetries(-1),
 	)
 	if err == nil {

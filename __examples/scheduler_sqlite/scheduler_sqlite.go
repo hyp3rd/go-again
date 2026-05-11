@@ -63,7 +63,8 @@ func main() {
 				Method: http.MethodGet,
 				URL:    target.URL,
 			},
-		})
+		},
+	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "schedule failed: %v\n", err)
 
