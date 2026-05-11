@@ -127,7 +127,8 @@ func TestSQLiteJobsStorageRetentionMaxRowsPerJobOption(t *testing.T) {
 	}
 
 	if history[0].Sequence != contractSequenceThree || history[1].Sequence != contractSequenceFour {
-		t.Fatalf("expected retained sequences [%d %d], got [%d %d]",
+		t.Fatalf(
+			"expected retained sequences [%d %d], got [%d %d]",
 			contractSequenceThree,
 			contractSequenceFour,
 			history[0].Sequence,
@@ -422,7 +423,8 @@ func testJobsStorageHistoryRetentionAndSorting(t *testing.T, factory jobsStorage
 	}
 
 	if history[0].Sequence != contractSequenceThree || history[1].Sequence != contractSequenceFour {
-		t.Fatalf("expected retained sequences [%d %d], got [%d %d]",
+		t.Fatalf(
+			"expected retained sequences [%d %d], got [%d %d]",
 			contractSequenceThree,
 			contractSequenceFour,
 			history[0].Sequence,

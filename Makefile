@@ -1,8 +1,8 @@
 include .project-settings.env
 
-GOLANGCI_LINT_VERSION ?= v2.11.4
-BUF_VERSION ?= v1.67.0
-GO_VERSION ?= 1.26.2
+GOLANGCI_LINT_VERSION ?= v2.12.2
+BUF_VERSION ?= v1.69.0
+GO_VERSION ?= 1.26.3
 GCI_PREFIX ?= github.com/hyp3rd/go-again
 PROTO_ENABLED ?= true
 
