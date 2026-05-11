@@ -61,6 +61,7 @@ linters:
     - ireturn
     - lll
     - nonamedreturns
+    - nolintlint
     - recvcheck
     - tagliatelle
     - tagalign
