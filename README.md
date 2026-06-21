@@ -408,7 +408,10 @@ The code and documentation in this project are released under Mozilla Public Lic
 
 ## Author
 
-I'm a surfer, a crypto trader, and a software architect with 15 years of experience designing highly available distributed production environments and developing cloud-native apps in public and private clouds. Feel free to hook me up on [LinkedIn](https://www.linkedin.com/in/francesco-cosentino/).
+Software architect with 15+ years building distributed systems and cloud-native platforms across banking,
+defense, and product startups. I work with challenges and research. Heavy on Go, Python, TypeScript and
+microservices. Comfortable across distributed infrastructure, complexity, security, and product.
+Feel free to hook me up on [LinkedIn](https://www.linkedin.com/in/francesco-cosentino/).
 
 [build-link]: https://github.com/hyp3rd/go-again/actions/workflows/go.yml
 [codeql-link]: https://github.com/hyp3rd/go-again/actions/workflows/codeql.yml
