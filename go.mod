@@ -3,7 +3,7 @@ module github.com/hyp3rd/go-again
 go 1.27.1
 
 require (
-	github.com/goccy/go-json v0.10.6
+	github.com/goccy/go-json v0.11.2
 	github.com/hyp3rd/ewrap v1.5.2
 	github.com/hyp3rd/sectools v1.2.9
 	github.com/stretchr/testify v1.12.1
