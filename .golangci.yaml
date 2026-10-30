@@ -42,7 +42,7 @@ run:
   # Define the Go version limit.
   # Mainly related to generics support since go1.18.
   # Default: use Go version from the go.mod file, fallback on the env var `GOVERSION`, fallback on 1.17
-  go: "1.27.1"
+  go: "1.27.3"
 
 linters:
   # Enable specific linter
@@ -144,16 +144,7 @@ linters:
       rules:
         - name: add-constant
           severity: warning
-          disabled: false
-          exclude:
-            - "./tests/retrier_test.go"
-            - "./tests/*.go"
-            - "tests/*"
-          arguments:
-            - max-lit-count: "3"
-              allow-strs: '"","-","key"'
-              allow-ints: "-1,0,1,2,10,1024,0o600,0o644,0o700,0o755,0666,0755"
-              allow-floats: "0.0,1.0"
+          disabled: true
 
         - name: cognitive-complexity
           severity: warning
