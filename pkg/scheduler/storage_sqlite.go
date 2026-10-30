@@ -420,9 +420,9 @@ func (s *SQLiteJobsStorage) RecordExecutionResult(ctx context.Context, id string
 		}
 
 		if s.historyRetention.MaxAge > 0 {
-			cutoff := time.Now().Add(-s.historyRetention.MaxAge).UnixNano()
+			cutoffNs := time.Now().Add(-s.historyRetention.MaxAge).UnixNano()
 
-			_, err = pruneHistoryOlderThanForJobTx(ctx, tx, id, cutoff)
+			_, err = pruneHistoryOlderThanForJobTx(ctx, tx, id, cutoffNs)
 			if err != nil {
 				return err
 			}
@@ -579,9 +579,9 @@ func (s *SQLiteJobsStorage) PruneHistoryWithRetention(ctx context.Context, reten
 
 	err := s.withWriteTx(ctx, "prune history", func(ctx context.Context, tx *sql.Tx) error {
 		if retention.MaxAge > 0 {
-			cutoff := time.Now().Add(-retention.MaxAge).UnixNano()
+			cutoffNs := time.Now().Add(-retention.MaxAge).UnixNano()
 
-			deletedByAge, pruneErr := pruneHistoryOlderThanTx(ctx, tx, cutoff)
+			deletedByAge, pruneErr := pruneHistoryOlderThanTx(ctx, tx, cutoffNs)
 			if pruneErr != nil {
 				return pruneErr
 			}
