@@ -4,7 +4,7 @@ go 1.27.3
 
 require (
 	github.com/goccy/go-json v0.12.0
-	github.com/hyp3rd/ewrap v1.5.2
+	github.com/hyp3rd/ewrap v1.5.3
 	github.com/hyp3rd/sectools v1.3.0
 	github.com/stretchr/testify v1.12.1
 	modernc.org/sqlite v1.61.0
